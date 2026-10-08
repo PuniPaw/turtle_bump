@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>자세 모니터 - 좌표 추출 프로토타입</title>
+<style>
+  :root { --bg:#f6f7f9; --ink:#1c2430; --mute:#6b7683; --accent:#2a6df4; --ok:#1f9d63; --bad:#d6453d; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px; background:var(--bg); color:var(--ink);
+         font-family:"Pretendard","Noto Sans KR",system-ui,sans-serif; }
+  h1 { font-size:20px; margin:0 0 16px; }
+  .layout { display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start; }
+  .stage { position:relative; width:640px; max-width:100%; background:#000; border-radius:8px; overflow:hidden; }
+  .stage video, .stage canvas { display:block; width:100%; transform:scaleX(-1); }
+  .stage canvas { position:absolute; inset:0; height:100%; }
+  .panel { min-width:260px; flex:1; }
+  button { font:inherit; padding:10px 18px; border:0; border-radius:6px; background:var(--accent); color:#fff; cursor:pointer; }
+  button:disabled { background:#a9b4c4; cursor:default; }
+  button:focus-visible { outline:3px solid #9bbcff; outline-offset:2px; }
+  dl { display:grid; grid-template-columns:auto 1fr; gap:6px 14px; margin:16px 0 0; font-variant-numeric:tabular-nums; }
+  dt { color:var(--mute); }
+  dd { margin:0; }
+  #status { margin-top:12px; color:var(--mute); }
+  #angle.ok { color:var(--ok); } #angle.bad { color:var(--bad); }
+</style>
+</head>
+<body>
+<h1>자세 모니터 - 웹캠 + MediaPipe 좌표 추출</h1>
+<div class="layout">
+  <div class="stage">
+    <video id="video" playsinline muted></video>
+    <canvas id="overlay"></canvas>
+  </div>
+  <div class="panel">
+    <button id="start">카메라 시작</button>
+    <div id="status">시작 버튼을 누르면 카메라 권한을 요청합니다.</div>
+    <dl>
+      <dt>사용 중인 쪽</dt><dd id="side">-</dd>
+      <dt>귀 (x, y)</dt><dd id="ear">-</dd>
+      <dt>어깨 (x, y)</dt><dd id="shoulder">-</dd>
+      <dt>머리 기울기</dt><dd id="angle">-</dd>
+    </dl>
+  </div>
+</div>
+
+<script type="module">
+import { PoseLandmarker, FilesetResolver, DrawingUtils }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const WASM  = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const MODEL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+
+const video  = document.getElementById("video");
+const canvas = document.getElementById("overlay");
+const ctx    = canvas.getContext("2d");
+const drawer = new DrawingUtils(ctx);
+const $ = (id) => document.getElementById(id);
+
+// ---- 팀원용 인터페이스 -------------------------------------------------
+// 다른 파트(각도 판정, UI, 통계)는 이 함수만 구독하면 됩니다.
+// callback(landmarks, { width, height }) : landmarks는 33개 관절(정규화 좌표 0~1)
+const listeners = [];
+export function onLandmarks(callback) { listeners.push(callback); }
+window.onLandmarks = onLandmarks; // 콘솔/다른 스크립트에서도 쓸 수 있게
+
+// ---- 간단한 귀-어깨 기울기 (확인용, 판정 로직은 B 담당) ------------------
+// 랜드마크 번호: 귀 L7 R8 / 어깨 L11 R12
+function pickSide(lm) {
+  const left  = lm[7].visibility + lm[11].visibility;
+  const right = lm[8].visibility + lm[12].visibility;
+  return left >= right
+    ? { side: "왼쪽", ear: lm[7], shoulder: lm[11] }
+    : { side: "오른쪽", ear: lm[8], shoulder: lm[12] };
+}
+
+// 어깨→귀 선이 수직선과 이루는 각도(도). 0이면 곧게 선 상태, 클수록 머리가 앞으로 나옴.
+function headTilt(ear, shoulder, w, h) {
+  const dx = Math.abs(ear.x - shoulder.x) * w;
+  const dy = (shoulder.y - ear.y) * h;
+  return Math.atan2(dx, dy) * 180 / Math.PI;
+}
+
+// ---- 화면 표시 ----------------------------------------------------------
+onLandmarks((lm, { width, height }) => {
+  const { side, ear, shoulder } = pickSide(lm);
+  const tilt = headTilt(ear, shoulder, width, height);
+  $("side").textContent     = side;
+  $("ear").textContent      = `${ear.x.toFixed(3)}, ${ear.y.toFixed(3)}`;
+  $("shoulder").textContent = `${shoulder.x.toFixed(3)}, ${shoulder.y.toFixed(3)}`;
+  const el = $("angle");
+  el.textContent = `${tilt.toFixed(1)}°`;
+  el.className = tilt > 25 ? "bad" : "ok"; // 임시 기준값, 보정 기능으로 대체 예정
+});
+
+// ---- 초기화 + 루프 ------------------------------------------------------
+let landmarker, lastVideoTime = -1;
+
+async function createLandmarker() {
+  const fileset = await FilesetResolver.forVisionTasks(WASM);
+  const options = (delegate) => ({
+    baseOptions: { modelAssetPath: MODEL, delegate },
+    runningMode: "VIDEO",
+    numPoses: 1,
+  });
+  try {
+    return await PoseLandmarker.createFromOptions(fileset, options("GPU"));
+  } catch {
+    return await PoseLandmarker.createFromOptions(fileset, options("CPU"));
+  }
+}
+
+function loop() {
+  if (video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    const result = landmarker.detectForVideo(video, performance.now());
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (result.landmarks.length) {
+      const lm = result.landmarks[0];
+      drawer.drawConnectors(lm, PoseLandmarker.POSE_CONNECTIONS, { color: "#ffffff88", lineWidth: 2 });
+      drawer.drawLandmarks(lm, { color: "#2a6df4", radius: 3 });
+      const size = { width: video.videoWidth, height: video.videoHeight };
+      listeners.forEach((fn) => fn(lm, size));
+    }
+  }
+  requestAnimationFrame(loop);
+}
+
+$("start").addEventListener("click", async () => {
+  const btn = $("start"), status = $("status");
+  btn.disabled = true;
+  try {
+    status.textContent = "모델을 불러오는 중...";
+    landmarker = await createLandmarker();
+    status.textContent = "카메라 권한을 확인하는 중...";
+    video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+    await video.play();
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    status.textContent = "분석 중입니다. 측면으로 앉아 귀와 어깨가 보이게 해주세요.";
+    loop();
+  } catch (err) {
+    console.error(err);
+    status.textContent = `시작하지 못했습니다: ${err.message}. localhost 또는 HTTPS에서 열었는지 확인해주세요.`;
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
