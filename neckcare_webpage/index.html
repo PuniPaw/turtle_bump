@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NeckCare</title>
+  <meta name="description" content="웹캠 기반 거북목 자세 모니터링 대시보드" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar"></aside>
+
+    <main class="main">
+      <header class="header" id="header"></header>
+
+      <div class="dashboard">
+        <div class="col col--main">
+          <div id="camera"></div>
+          <!-- 나쁜 자세 알림: state.alert가 있을 때만 표시됨 -->
+          <div id="alert" hidden></div>
+          <div id="posture-status"></div>
+          <div class="row-2">
+            <div id="stats"></div>
+            <div id="history"></div>
+          </div>
+        </div>
+
+        <div class="col col--side">
+          <div id="frequency"></div>
+          <div class="side-stack">
+            <div id="tips"></div>
+            <div id="notify"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div class="toast-root" id="toast-root" aria-live="polite"></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
