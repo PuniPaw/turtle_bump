@@ -1,50 +1,3 @@
-<!doctype html>
-<html lang="ko">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>자세 모니터 - 좌표 추출 프로토타입</title>
-<style>
-  :root { --bg:#f6f7f9; --ink:#1c2430; --mute:#6b7683; --accent:#2a6df4; --ok:#1f9d63; --bad:#d6453d; }
-  * { box-sizing: border-box; }
-  body { margin:0; padding:24px; background:var(--bg); color:var(--ink);
-         font-family:"Pretendard","Noto Sans KR",system-ui,sans-serif; }
-  h1 { font-size:20px; margin:0 0 16px; }
-  .layout { display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start; }
-  .stage { position:relative; width:640px; max-width:100%; background:#000; border-radius:8px; overflow:hidden; }
-  .stage video, .stage canvas { display:block; width:100%; transform:scaleX(-1); }
-  .stage canvas { position:absolute; inset:0; height:100%; }
-  .panel { min-width:260px; flex:1; }
-  button { font:inherit; padding:10px 18px; border:0; border-radius:6px; background:var(--accent); color:#fff; cursor:pointer; }
-  button:disabled { background:#a9b4c4; cursor:default; }
-  button:focus-visible { outline:3px solid #9bbcff; outline-offset:2px; }
-  dl { display:grid; grid-template-columns:auto 1fr; gap:6px 14px; margin:16px 0 0; font-variant-numeric:tabular-nums; }
-  dt { color:var(--mute); }
-  dd { margin:0; }
-  #status { margin-top:12px; color:var(--mute); }
-  #angle.ok { color:var(--ok); } #angle.bad { color:var(--bad); }
-</style>
-</head>
-<body>
-<h1>자세 모니터 - 웹캠 + MediaPipe 좌표 추출</h1>
-<div class="layout">
-  <div class="stage">
-    <video id="video" playsinline muted></video>
-    <canvas id="overlay"></canvas>
-  </div>
-  <div class="panel">
-    <button id="start">카메라 시작</button>
-    <div id="status">시작 버튼을 누르면 카메라 권한을 요청합니다.</div>
-    <dl>
-      <dt>사용 중인 쪽</dt><dd id="side">-</dd>
-      <dt>귀 (x, y)</dt><dd id="ear">-</dd>
-      <dt>어깨 (x, y)</dt><dd id="shoulder">-</dd>
-      <dt>머리 기울기</dt><dd id="angle">-</dd>
-    </dl>
-  </div>
-</div>
-
-<script type="module">
 import { PoseLandmarker, FilesetResolver, DrawingUtils }
   from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 
@@ -64,7 +17,7 @@ const listeners = [];
 export function onLandmarks(callback) { listeners.push(callback); }
 window.onLandmarks = onLandmarks; // 콘솔/다른 스크립트에서도 쓸 수 있게
 
-// ---- 간단한 귀-어깨 기울기 (확인용, 판정 로직은 B 담당) ------------------
+// ---- 귀-어깨 기울기 ------------------
 // 랜드마크 번호: 귀 L7 R8 / 어깨 L11 R12
 function pickSide(lm) {
   const left  = lm[7].visibility + lm[11].visibility;
@@ -145,6 +98,3 @@ $("start").addEventListener("click", async () => {
     btn.disabled = false;
   }
 });
-</script>
-</body>
-</html>

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>자세 모니터 - 좌표 추출 프로토타입</title>
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/components.css">
+</head>
+<body>
+<h1>자세 모니터 - 웹캠 + MediaPipe 좌표 추출</h1>
+<div class="layout">
+  <div class="stage">
+    <video id="video" playsinline muted></video>
+    <canvas id="overlay"></canvas>
+  </div>
+  <div class="panel">
+    <button id="start">카메라 시작</button>
+    <div id="status">시작 버튼을 누르면 카메라 권한을 요청합니다.</div>
+    <dl>
+      <dt>사용 중인 쪽</dt><dd id="side">-</dd>
+      <dt>귀 (x, y)</dt><dd id="ear">-</dd>
+      <dt>어깨 (x, y)</dt><dd id="shoulder">-</dd>
+      <dt>머리 기울기</dt><dd id="angle">-</dd>
+    </dl>
+  </div>
+</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
