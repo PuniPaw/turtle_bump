@@ -1,0 +1,18 @@
+/* 영상 + 오버레이 */
+.stage { position: relative; width: 640px; max-width: 100%; background: #000; border-radius: 8px; overflow: hidden; }
+.stage video, .stage canvas { display: block; width: 100%; transform: scaleX(-1); }
+.stage canvas { position: absolute; inset: 0; height: 100%; }
+
+/* 오른쪽 패널 */
+.panel { min-width: 260px; flex: 1; }
+#status { margin-top: 12px; color: var(--mute); }
+dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 16px 0 0; font-variant-numeric: tabular-nums; }
+dt { color: var(--mute); }
+dd { margin: 0; }
+#angle.ok { color: var(--ok); }
+#angle.bad { color: var(--bad); }
+
+/* 버튼 */
+button { font: inherit; padding: 10px 18px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; }
+button:disabled { background: #a9b4c4; cursor: default; }
+button:focus-visible { outline: 3px solid #9bbcff; outline-offset: 2px; }
