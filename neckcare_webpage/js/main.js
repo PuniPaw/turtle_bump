@@ -1,8 +1,11 @@
 import { initialState, createStore, buildEmptyTrend } from './state.js';
 import { showToast } from './ui/toast.js';
-import { startCamera, hasCamera, startPoseOverlay } from './pose.js';
+import { startCamera, hasCamera } from './pose.js';
 import { startViewer } from './webrtc.js';
-import { loadNotifyLevel, saveNotifyLevel, runNotification } from './notify.js';
+import {
+  loadNotifyLevel, saveNotifyLevel, syncExtensionLevel,
+  previewNotification, startPostureAlert, stopPostureAlert, isPostureAlertActive,
+} from './notify.js';
 import { mountSidebar } from './components/Sidebar.js';
 import { mountHeader } from './components/Header.js';
 import { mountCameraPreview } from './components/CameraPreview.js';
@@ -13,6 +16,7 @@ import { renderStatsOverview } from './components/StatCard.js';
 import { renderDetectionHistory } from './components/DetectionHistory.js';
 import { renderPostureTips } from './components/PostureTips.js';
 import { mountNotifySettings } from './components/NotifySettings.js';
+import { createCalibration } from './calibration.js';
 
 const store = createStore(initialState);
 const $ = (id) => document.getElementById(id);
@@ -25,40 +29,13 @@ mountSidebar($('sidebar'), {
 
 const header = mountHeader($('header'));
 
-// [범위 제한] 카메라 연결 + MediaPipe Pose 뼈대 표시까지만 한다.
+// [범위 제한] 카메라 연결(영상 표시)까지만 한다. MediaPipe Pose는 실행하지 않는다.
+// Pose 뼈대 표시가 다시 필요하면 pose.js의 startPoseOverlay(video, overlay)를 연결 직후 호출한다.
 // 각도 계산·거북목 판정·통계·실제 감지 알림은 별도 요청 전까지 연결하지 않는다.
 let cameraSession = null;
-let poseSession = null;
-let poseToken = 0;
-
-async function attachPoseOverlay() {
-  const token = ++poseToken;
-  const { video, overlay } = camera.getElements();
-  camera.setPoseStatus('불러오는 중');
-  try {
-    const session = await startPoseOverlay(video, overlay);
-    if (token !== poseToken) {
-      session.stop();
-      return;
-    }
-    poseSession = session;
-    camera.setPoseStatus('연결됨');
-  } catch (err) {
-    console.error(err);
-    if (token === poseToken) camera.setPoseStatus('연결 실패');
-  }
-}
-
-function detachPoseOverlay() {
-  poseToken++;
-  poseSession?.stop();
-  poseSession = null;
-  camera.setPoseStatus('미연결');
-}
 
 function onCameraConnected() {
   store.setState({ camera: { connected: true, error: null } });
-  attachPoseOverlay();
 }
 
 const camera = mountCameraPreview($('camera'), {
@@ -98,7 +75,6 @@ const camera = mountCameraPreview($('camera'), {
       onError(err) {
         console.error(err);
         camera.hideViewerWait();
-        detachPoseOverlay();
         store.setState({ camera: { connected: false, error: err.message } });
         showToast(`폰 카메라 연결 실패: ${err.message}`);
         cameraSession = null;
@@ -106,7 +82,6 @@ const camera = mountCameraPreview($('camera'), {
     });
   },
   onDisconnectClick() {
-    detachPoseOverlay();
     cameraSession?.stop();
     cameraSession = null;
     camera.hideViewerWait();
@@ -123,40 +98,33 @@ const frequency = mountFrequencyChart($('frequency'), {
 
 renderPostureTips($('tips'));
 
-// 알림 미리보기: posture/stats/history는 건드리지 않고, 배너도 잠시 뒤 스스로 닫는다.
-const PREVIEW_BANNER_MS = 5000;
-let previewBannerTimer = null;
-
-function showPreviewBanner({ title, message }) {
-  const alert = { level: 'bad', title, message };
-  // setState는 객체를 병합하므로, 비운 뒤 넣어야 같은 참조가 유지돼 자동 닫기가 동작한다.
-  store.setState({ alert: null });
-  store.setState({ alert });
-  $('alert').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  clearTimeout(previewBannerTimer);
-  previewBannerTimer = setTimeout(() => {
-    if (store.getState().alert === alert) store.setState({ alert: null });
-  }, PREVIEW_BANNER_MS);
-}
-
+// 알림 미리보기: posture/stats/history는 건드리지 않고, 약 3초 뒤 스스로 정리된다.
 mountNotifySettings($('notify'), {
   initialLevel: loadNotifyLevel(),
-  onChange: saveNotifyLevel,
+  onChange(level) {
+    saveNotifyLevel(level);
+    // 실제 감지 알림이 켜져 있는 중이면 바뀐 강도로 다시 표시한다.
+    if (isPostureAlertActive()) startPostureAlert(level);
+  },
   async onPreview(level) {
-    const result = await runNotification(level, {
+    const result = await previewNotification(level, {
       title: '[미리보기] 거북목 자세 알림',
       message: '자세 알림은 이렇게 표시돼요. 미리보기는 감지 기록과 통계에 남지 않아요.',
-      showBanner: showPreviewBanner,
     });
     if (result.system === 'denied') {
       showToast('Windows 알림이 차단되어 있어요. 주소창 왼쪽 사이트 설정에서 알림을 허용해 주세요.', { duration: 5000 });
     } else if (result.system === 'unsupported') {
       showToast('이 브라우저는 Windows 알림을 지원하지 않아요.');
-    } else if (result.system === 'shown' && result.banner === 'off') {
+    } else if (result.system === 'error') {
+      showToast('Windows 알림을 표시하지 못했어요. Chrome과 Windows의 알림 설정을 확인해 주세요.', { duration: 5000 });
+    } else if (result.system === 'shown' && level === 'weak') {
       showToast('Windows 알림을 보냈어요. 화면 오른쪽 아래를 확인해 보세요.');
+    } else if (result.system === 'unknown' && level === 'weak') {
+      showToast('Windows 알림 표시 여부를 확인하지 못했어요. 알림 센터(Win+N)를 확인해 보세요.', { duration: 5000 });
     }
   },
 });
+syncExtensionLevel(loadNotifyLevel());
 
 function render(state) {
   header.update(state);
@@ -171,6 +139,29 @@ function render(state) {
 store.subscribe(render);
 render(store.getState());
 
+// 초기 자세 설정: 카메라 연결 성공(connected false→true) 시 시작, 해제(true→false) 시 즉시 중단.
+// 기존 카메라 연결·해제 코드는 건드리지 않고 상태 변화만 지켜본다.
+const calibration = createCalibration({
+  view: { show: (s) => camera.showCalibration(s), hide: () => camera.hideCalibration() },
+  getVideo: () => camera.getElements().video,
+  isCameraConnected: () => store.getState().camera.connected,
+});
+let cameraWasConnected = store.getState().camera.connected;
+store.subscribe((state) => {
+  const connected = state.camera.connected;
+  if (connected === cameraWasConnected) return;
+  cameraWasConnected = connected;
+  if (connected) calibration.start();
+  else calibration.cancel();
+});
+
 // 다른 파트(A·B·D)가 통합 시 접근할 수 있도록 노출한다.
 // 예: window.neckcare.store.setState({ posture: { ts: Date.now(), angle: 12, status: 'good' } })
-window.neckcare = { store, camera };
+// 실제 거북목 알림: 판정 파트가 거북목이면 alerts.start(), 정상 자세로 돌아오면 alerts.stop()을 호출한다.
+// 판정 모듈 등록: neckcare.registerAnalyzer({ beginBaseline, finishBaseline, start, stop }) — calibration.js 참고
+window.neckcare = {
+  store,
+  camera,
+  alerts: { start: startPostureAlert, stop: stopPostureAlert },
+  registerAnalyzer: calibration.registerAnalyzer,
+};

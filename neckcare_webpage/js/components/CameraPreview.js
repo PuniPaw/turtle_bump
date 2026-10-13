@@ -28,6 +28,11 @@ export function mountCameraPreview(el, { onConnectClick, onDisconnectClick } = {
         <video class="camera__video" playsinline muted hidden></video>
         <canvas class="camera__overlay" hidden></canvas>
 
+        <div class="calib" data-role="calib" hidden>
+          <p class="calib__text" data-role="calib-text" aria-live="polite"></p>
+          <div class="calib__count" data-role="calib-count" aria-hidden="true"></div>
+        </div>
+
         <div class="camera__grid" aria-hidden="true"></div>
         <span class="camera__corner camera__corner--tl"></span>
         <span class="camera__corner camera__corner--tr"></span>
@@ -38,9 +43,6 @@ export function mountCameraPreview(el, { onConnectClick, onDisconnectClick } = {
           <button type="button" class="camera__badge" data-role="cam-badge">
             <span class="camera__badge-dot"></span><span data-role="cam-badge-text">카메라 OFF</span>
           </button>
-          <span class="camera__badge camera__badge--ghost">
-            ${icon('cpu', { size: 14 })}<span data-role="pose-badge">MediaPipe Pose · 미연결</span>
-          </span>
         </div>
 
         <div class="camera__empty" data-role="empty">
@@ -120,8 +122,35 @@ export function mountCameraPreview(el, { onConnectClick, onDisconnectClick } = {
       waiting = null;
       paint();
     },
-    setPoseStatus(text) {
-      q('pose-badge').textContent = `MediaPipe Pose · ${text}`;
+    // 초기 자세 설정 안내(문구·카운트다운). 진행 관리는 calibration.js가 한다.
+    // phase: 'guide' | 'countdown' | 'checking' | 'waiting' | 'connected' | 'start' | 'failed'
+    showCalibration({ phase, text = '', count = null }) {
+      const calib = q('calib');
+      calib.hidden = false;
+      calib.dataset.phase = phase;
+      q('calib-text').textContent = text;
+      const countEl = q('calib-count');
+      if (count == null) {
+        countEl.textContent = '';
+        countEl.removeAttribute('data-n');
+      } else if (countEl.dataset.n !== String(count)) {
+        countEl.dataset.n = String(count);
+        countEl.textContent = String(count);
+        // 숫자가 바뀔 때마다 등장 효과를 다시 실행
+        countEl.classList.remove('is-pop');
+        void countEl.offsetWidth;
+        countEl.classList.add('is-pop');
+      }
+    },
+    hideCalibration() {
+      const calib = q('calib');
+      calib.hidden = true;
+      delete calib.dataset.phase;
+      q('calib-text').textContent = '';
+      const countEl = q('calib-count');
+      countEl.textContent = '';
+      countEl.removeAttribute('data-n');
+      countEl.classList.remove('is-pop');
     },
     update(state) {
       lastState = state;
