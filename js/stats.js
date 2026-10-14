@@ -1,9 +1,13 @@
-
 /*
  * stats.js
- * D 담당: 서버 통계 조회
+ * D 담당 - 통계 조회 연결
  *
- * 실제 통계 계산은 Flask에서 수행한다.
+ * v0.3.3 최종 보완본
+ *
+ * 통계 계산은 app.py에서 담당한다.
+ * 이 파일은 서버 응답을 그대로 전달한다.
+ *
+ * null과 0을 임의로 바꾸지 않는다.
  */
 
 import {
@@ -11,14 +15,14 @@ import {
     getStats
 } from "./storage.js";
 
-// 통계 조회 전에 필요한 작업 실행
+// 통계 조회 전 현재 이벤트 저장 작업
 async function runBeforeQuery(beforeQuery, asOf) {
     if (typeof beforeQuery === "function") {
         await beforeQuery(asOf);
     }
 }
 
-// C 담당의 통계 화면에 제공할 Provider
+// C의 stats-source.js에서 사용할 Provider
 export function createStatsProvider({
     beforeQuery
 } = {}) {
@@ -28,10 +32,10 @@ export function createStatsProvider({
             unit = "day",
             asOf = Date.now()
         } = {}) {
-            // 1. 현재 자세 스냅샷 생성 및 저장
+            // 먼저 최신 자세 스냅샷을 DB에 저장한다.
             await runBeforeQuery(beforeQuery, asOf);
 
-            // 2. 저장 완료 후 Flask 통계 조회
+            // 저장이 완료되면 통계를 조회한다.
             return getStats({
                 period,
                 unit,
@@ -51,7 +55,10 @@ export async function updateHomeMeasuredSec(
 
     const result = await getHomeSummary(asOf);
 
-    // 기존 store 구조가 있을 경우 값 갱신
+    // null: 기록 없음
+    // 0: 기록은 있으나 유효 측정시간 0초
+    const measuredSec = result.measured_sec;
+
     if (
         store &&
         typeof store.setState === "function"
@@ -64,7 +71,7 @@ export async function updateHomeMeasuredSec(
         store.setState({
             stats: {
                 ...(oldState?.stats || {}),
-                measuredSec: result.measured_sec
+                measuredSec
             }
         });
     }
@@ -72,7 +79,7 @@ export async function updateHomeMeasuredSec(
     return result;
 }
 
-// 통계 데이터를 직접 조회하는 함수
+// 직접 통계를 조회할 때 사용
 export async function loadStats({
     period = "today",
     unit = "day",

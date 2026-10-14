@@ -1,19 +1,24 @@
-
 /*
  * storage.js
- * D 담당: Flask API 통신
+ * D 담당 - Flask API 통신
  *
- * 역할
- * 1. 세션 생성
+ * v0.3.3 최종 보완본
+ *
+ * 주요 역할
+ * 1. 측정 세션 생성
  * 2. 자세 이벤트 저장
- * 3. 세션 종료
+ * 3. 측정 세션 종료
  * 4. 홈 및 통계 조회
- * 5. 페이지 종료 시 Beacon 전송
+ * 5. 페이지 종료 시 sendBeacon 전송
+ *
+ * 주의:
+ * 이벤트의 is_final 값은 C가 생성하고,
+ * 이 파일은 해당 값을 변경하지 않고 전송한다.
  */
 
 export const API_BASE = "http://127.0.0.1:5000";
 
-// Flask 서버에 JSON 요청을 보내는 공통 함수
+// 공통 JSON 요청 함수
 async function requestJSON(path, options = {}) {
     const response = await fetch(API_BASE + path, {
         ...options,
@@ -25,31 +30,33 @@ async function requestJSON(path, options = {}) {
 
     const raw = await response.text();
 
-    let data;
+    let data = null;
+
     try {
         data = raw ? JSON.parse(raw) : null;
     } catch {
         throw new Error(
-            `서버 JSON 응답을 읽지 못했습니다. HTTP ${response.status}`
+            `JSON 응답 해석 실패 (HTTP ${response.status})`
         );
     }
 
     if (!response.ok) {
         const error = new Error(
             data?.error?.message ||
-            `서버 요청 실패: HTTP ${response.status}`
+            `서버 요청 실패 (HTTP ${response.status})`
         );
 
-        // app.py에서 전달하는 오류 정보를 보존
+        // Flask에서 전달한 오류 종류를 유지한다.
         error.status = response.status;
         error.reason = data?.error?.reason || null;
+
         throw error;
     }
 
     return data;
 }
 
-// 1. 카메라 연결 성공 후 세션 생성
+// 1. 세션 생성
 export async function startSession(startedAtMs = Date.now()) {
     const result = await requestJSON("/api/sessions", {
         method: "POST",
@@ -61,16 +68,17 @@ export async function startSession(startedAtMs = Date.now()) {
     return result.session_id;
 }
 
-// 2. 자세 이벤트 저장
+// 2. 이벤트 저장
 export async function saveEvents(sessionId, events) {
     if (!Number.isInteger(sessionId)) {
-        throw new Error("sessionId가 올바르지 않습니다.");
+        throw new Error("세션 ID가 올바르지 않습니다.");
     }
 
     if (!Array.isArray(events) || events.length > 500) {
-        throw new Error("events는 최대 500개 배열이어야 합니다.");
+        throw new Error("이벤트는 최대 500개까지 전송할 수 있습니다.");
     }
 
+    // 이벤트 내부의 is_final은 그대로 보낸다.
     return requestJSON(
         `/api/sessions/${sessionId}/events`,
         {
@@ -81,19 +89,18 @@ export async function saveEvents(sessionId, events) {
 }
 
 // 3. 세션 종료
-// 재시도할 때는 반드시 같은 endedAtMs와 events를 전달
 export async function endSession(
     sessionId,
-    reason = "camera_off",
-    endedAtMs = Date.now(),
+    reason,
+    endedAtMs,
     events = []
 ) {
     if (!Number.isInteger(sessionId)) {
-        throw new Error("sessionId가 올바르지 않습니다.");
+        throw new Error("세션 ID가 올바르지 않습니다.");
     }
 
     if (!Array.isArray(events) || events.length > 500) {
-        throw new Error("종료 이벤트가 500개를 초과했습니다.");
+        throw new Error("종료 이벤트는 최대 500개입니다.");
     }
 
     return requestJSON(
@@ -111,57 +118,57 @@ export async function endSession(
 
 // 4. 홈 화면 누적 측정 시간
 export async function getHomeSummary(asOfMs = Date.now()) {
-    const query = new URLSearchParams({
+    const params = new URLSearchParams({
         as_of_ms: String(asOfMs)
     });
 
-    return requestJSON(`/api/summary/home?${query}`);
+    return requestJSON(`/api/summary/home?${params}`);
 }
 
-// 5. 기간별 통계 조회
+// 5. 기간별 통계
 export async function getStats({
     period = "today",
     unit = "day",
     asOf = Date.now()
 } = {}) {
-    const query = new URLSearchParams({
+    const params = new URLSearchParams({
         period,
         unit,
         as_of_ms: String(asOf)
     });
 
-    return requestJSON(`/api/stats?${query}`);
+    return requestJSON(`/api/stats?${params}`);
 }
 
 // 6. 페이지 이탈 시 종료 요청
-// true는 전송 예약 성공이며 DB 저장 완료를 의미하지 않음
 export function sendEndBeacon(
     sessionId,
-    reason = "pagehide",
-    events = [],
-    endedAtMs = Date.now()
+    reason,
+    endedAtMs,
+    events = []
 ) {
     if (
         !Number.isInteger(sessionId) ||
+        !Number.isInteger(endedAtMs) ||
         !Array.isArray(events) ||
         events.length > 500
     ) {
         return false;
     }
 
-    const body = JSON.stringify({
+    const payload = JSON.stringify({
         ended_at_ms: endedAtMs,
         reason,
         events
     });
 
-    const blob = new Blob([body], {
+    const blob = new Blob([payload], {
         type: "application/json"
     });
 
-    // Beacon 전송 크기 제한 고려
+    // 브라우저의 Beacon 크기 제한을 고려한다.
     if (blob.size >= 64 * 1024) {
-        console.warn("[D] Beacon 데이터가 너무 큽니다.");
+        console.warn("[D] Beacon 전송 크기 초과");
         return false;
     }
 
@@ -172,6 +179,7 @@ export function sendEndBeacon(
         return false;
     }
 
+    // true는 전송 예약 성공일 뿐 DB 저장 완료는 아니다.
     return navigator.sendBeacon(
         `${API_BASE}/api/sessions/${sessionId}/end`,
         blob
