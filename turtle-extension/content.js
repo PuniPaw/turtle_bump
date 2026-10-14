@@ -11,9 +11,16 @@
   const PREVIEW_MS = 3000;
   const HEARTBEAT_MS = 10000;
   const STALE_MS = 30000;   // 이 시간 동안 NeckCare 탭 소식이 없으면 알림을 끈 것으로 본다
+  // 자세 종류별 문구 (웹페이지 notify.js의 LIVE_TEXT와 같게 유지)
   const LIVE_TEXT = {
-    title: '거북목 자세가 감지되었어요',
-    message: '고개를 들고 어깨를 펴 주세요. 바른 자세로 돌아오면 알림이 사라져요.',
+    turtle: {
+      title: '거북목 자세가 감지되었어요',
+      message: '고개를 들고 어깨를 펴 주세요. 바른 자세로 돌아오면 알림이 사라져요.',
+    },
+    waist: {
+      title: '허리 굽음 자세가 감지되었어요',
+      message: '허리를 펴고 등을 의자에 기대 주세요. 바른 자세로 돌아오면 알림이 사라져요.',
+    },
   };
   const PREVIEW_TEXT = {
     title: '[미리보기] 거북목 자세 알림',
@@ -53,8 +60,16 @@
 
   function paintLive() {
     if (previewTimer) return;
-    if (!isApp && liveActive()) paint(alert.level, LIVE_TEXT, `live:${alert.level}`);
-    else clear();
+    if (!isApp && liveActive()) {
+      const text = LIVE_TEXT[alert.kind] ?? LIVE_TEXT.turtle;
+      // 강도가 같고 종류만 바뀌었으면 문구만 바꾼다(거북이는 그대로)
+      if (shownKey.startsWith(`live:${alert.level}:`) && shownKey !== `live:${alert.level}:${alert.kind}`) {
+        overlay.update(text);
+        shownKey = `live:${alert.level}:${alert.kind}`;
+        return;
+      }
+      paint(alert.level, text, `live:${alert.level}:${alert.kind}`);
+    } else clear();
   }
 
   // 표시 중일 때만 1초마다: 오래된 알림 정리, 페이지가 오버레이를 지웠으면 다시 붙이기
@@ -127,7 +142,7 @@
     const d = e.data;
     if (!d || d.source !== 'neckcare-app') return;
     if (d.type === 'alert') {
-      lastAlert = { type: 'alert', active: Boolean(d.active), level: d.level || null };
+      lastAlert = { type: 'alert', active: Boolean(d.active), level: d.level || null, kind: d.kind || null };
       send(lastAlert);
     } else if (d.type === 'level') {
       lastLevel = { type: 'level', level: d.level };

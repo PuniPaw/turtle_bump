@@ -1,14 +1,16 @@
 // NeckCare 페이지에서 온 알림 상태를 chrome.storage에 저장하면 모든 탭의 content.js가 반응한다.
 //
 // 저장 키
-//   neckcareAlert     { active, level }  실제 거북목 알림 상태 (NeckCare 판정 결과로만 바뀜)
+//   neckcareAlert     { active, level, kind }  실제 자세 알림 상태 (NeckCare 판정 결과로만 바뀜)
+//                     kind: 'turtle'(거북목) | 'waist'(허리 굽음)
 //   neckcareLevel     'weak' | 'medium' | 'strong'  NeckCare에서 선택한 알림 강도
 //   neckcareHeartbeat 마지막으로 NeckCare 탭이 살아 있다고 알린 시각(ms)
 //
 // NeckCare 탭이 닫히거나 새로고침되면 알림을 끈다. 그렇지 않으면 모든 사이트에 거북이가 남는다.
 
 const LEVELS = ['weak', 'medium', 'strong'];
-const OFF = { active: false, level: null };
+const KINDS = ['turtle', 'waist'];
+const OFF = { active: false, level: null, kind: null };
 
 function clearAlert() {
   return chrome.storage.local.set({ neckcareAlert: OFF });
@@ -22,8 +24,9 @@ chrome.runtime.onConnect.addListener((port) => {
     if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'alert') {
       const level = LEVELS.includes(msg.level) ? msg.level : null;
+      const kind = KINDS.includes(msg.kind) ? msg.kind : 'turtle';
       chrome.storage.local.set({
-        neckcareAlert: msg.active ? { active: true, level } : OFF,
+        neckcareAlert: msg.active ? { active: true, level, kind } : OFF,
         neckcareHeartbeat: Date.now(),
       });
     } else if (msg.type === 'level' && LEVELS.includes(msg.level)) {

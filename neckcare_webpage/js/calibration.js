@@ -1,8 +1,9 @@
 // 초기 자세 설정 진행 관리. 화면은 CameraPreview(showCalibration / hideCalibration)가 그린다.
 //
-// 진행: 안내(1초) → 카운트다운 3·2·1(각 1초) → 끝 안내(2초) → 안내 UI 제거
-//   - 판정 모듈이 없으면 UI 카운트다운만 하고 "자세 분석 기능 연결 대기 중"(2초) → "연결 성공!"(1.2초)을 보여준다.
-//   - 판정 모듈이 있으면 기준 자세 측정이 성공했을 때만 "거북목 판정 시작!" 후 판정을 시작한다.
+// 진행
+//   - 판정 모듈이 없으면: 안내(1초) → 3·2·1(각 1초) → "자세 분석 기능 연결 대기 중"(2초) → "연결 성공!"(1.2초)
+//   - 판정 모듈이 있으면: "자세 분석을 준비하는 중"(beginBaseline이 끝날 때까지) → 3·2·1(B의 3초 수집과 같은 구간)
+//     → "기준 자세를 확인하는 중" → 성공했을 때만 "거북목 판정 시작!"(2초) 후 판정 시작
 //
 // 이 파일은 측정·판정을 하지 않는다. 실제 측정은 registerAnalyzer()로 등록되는 B 파트 모듈이 한다.
 // [연결 위치] B(판정) 파트가 아래 모양의 객체를 등록한다(window.neckcare.registerAnalyzer로도 가능).
@@ -18,6 +19,7 @@ const END_MS = 2000;
 const CONNECTED_MS = 1200;
 
 const TEXT = {
+  loading: '자세 분석을 준비하는 중이에요. 바른 자세로 앉아 주세요',
   guide: '3초 동안 바른 자세를 유지해주세요',
   checking: '기준 자세를 확인하는 중이에요',
   waiting: '자세 분석 기능 연결 대기 중',
@@ -26,10 +28,10 @@ const TEXT = {
   failed: '기준 자세를 설정하지 못했어요. 카메라를 다시 연결해 주세요.',
 };
 
-// 탭 이동 시 취소 후 돌아오면 다시 시작하는 단계(판정 시작 전 단계만)
+// 탭 이동·화면 전환 시 취소 후 돌아오면 다시 시작하는 단계(판정 시작 전 단계만)
 const SETUP_PHASES = new Set(['guide', 'countdown', 'checking']);
 
-export function createCalibration({ view, getVideo, isCameraConnected }) {
+export function createCalibration({ view, getVideo, isCameraConnected, isViewActive = () => true }) {
   let analyzer = null;
   let active = null;        // 지금 진행 중인 판정 모듈(등록 객체)
   let token = 0;            // 시작할 때마다 증가. 이전 진행의 늦은 타이머·비동기 결과를 무시하는 데 쓴다.
@@ -82,9 +84,10 @@ export function createCalibration({ view, getVideo, isCameraConnected }) {
     active = mod;
 
     phase = 'guide';
-    view.show({ phase: 'guide', text: TEXT.guide });
-
     if (mod) {
+      // 판정 모듈 준비(첫 연결 땐 모델 로딩) 동안 안내. 준비가 끝나는 즉시 B가 3초 수집을 시작하므로
+      // 1초 안내 대기 없이 바로 3·2·1을 세어 화면과 실제 수집 구간을 맞춘다.
+      view.show({ phase: 'waiting', text: TEXT.loading });
       try {
         await mod.beginBaseline(getVideo());
       } catch (err) {
@@ -93,9 +96,10 @@ export function createCalibration({ view, getVideo, isCameraConnected }) {
         return;
       }
       if (!alive(t)) return;
+    } else {
+      view.show({ phase: 'guide', text: TEXT.guide });
+      if (!(await wait(GUIDE_MS, t))) return;
     }
-
-    if (!(await wait(GUIDE_MS, t))) return;
 
     phase = 'countdown';
     for (let n = COUNT_FROM; n >= 1; n--) {
@@ -153,12 +157,15 @@ export function createCalibration({ view, getVideo, isCameraConnected }) {
     phase = 'idle';
   }
 
+  // 사용자가 지금 카메라 화면을 볼 수 있는지(탭이 보이고, 홈 화면이 열려 있는지)
+  const canShow = () => !document.hidden && isViewActive();
+
   // 카메라 연결 성공 시 호출. 이전 진행은 정리하고 처음부터 시작한다.
   function start() {
     reset();
     restartOnVisible = false;
-    if (document.hidden) {
-      restartOnVisible = true;   // 탭이 보이지 않으면 돌아왔을 때 시작
+    if (!canShow()) {
+      restartOnVisible = true;   // 탭이 숨겨졌거나 다른 화면이면 돌아왔을 때 시작
       return;
     }
     run(token);
@@ -170,18 +177,26 @@ export function createCalibration({ view, getVideo, isCameraConnected }) {
     reset();
   }
 
-  // 초기 설정 중 탭을 떠나면 취소하고, 돌아왔을 때 카메라가 연결돼 있으면 처음부터 다시 시작한다.
-  // 판정이 시작된 뒤(analyzing)에는 탭 이동으로 아무것도 하지 않는다.
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-      if (SETUP_PHASES.has(phase)) {
-        reset();
-        restartOnVisible = true;
-      }
-    } else if (restartOnVisible) {
-      restartOnVisible = false;
-      if (isCameraConnected()) start();
+  // 초기 설정 단계라면 취소하고, 돌아왔을 때 다시 시작하도록 표시한다.
+  // 판정이 시작된 뒤(analyzing)에는 아무것도 하지 않는다(카메라·판정 유지).
+  function suspend() {
+    if (SETUP_PHASES.has(phase)) {
+      reset();
+      restartOnVisible = true;
     }
+  }
+
+  // 다시 볼 수 있게 되면, 취소됐던 초기 설정을 카메라가 연결돼 있을 때만 처음부터 다시 시작한다.
+  function resume() {
+    if (!restartOnVisible || !canShow()) return;
+    restartOnVisible = false;
+    if (isCameraConnected()) start();
+  }
+
+  // 초기 설정 중 탭을 떠나면 취소하고, 돌아왔을 때 카메라가 연결돼 있으면 처음부터 다시 시작한다.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) suspend();
+    else resume();
   });
 
   function registerAnalyzer(mod) {
@@ -191,5 +206,6 @@ export function createCalibration({ view, getVideo, isCameraConnected }) {
     analyzer = mod;   // 다음 카메라 연결(또는 재시작)부터 적용
   }
 
-  return { start, cancel, registerAnalyzer, getPhase: () => phase };
+  // suspend / resume: 홈 ↔ 통계 화면 전환 때 main.js가 호출한다(카메라는 건드리지 않음).
+  return { start, cancel, suspend, resume, registerAnalyzer, getPhase: () => phase };
 }

@@ -24,6 +24,7 @@ const SILHOUETTE = `
 export function mountCameraPreview(el, { onConnectClick, onDisconnectClick } = {}) {
   el.innerHTML = `
     <section class="card camera-card" aria-label="카메라 미리보기">
+      <h2 class="home-card__title camera-card__title">${icon('camera', { size: 24, className: 'home-card__icon' })}실시간 카메라</h2>
       <div class="camera" data-connected="false">
         <video class="camera__video" playsinline muted hidden></video>
         <canvas class="camera__overlay" hidden></canvas>

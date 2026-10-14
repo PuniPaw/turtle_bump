@@ -17,28 +17,25 @@
     <aside class="sidebar" id="sidebar"></aside>
 
     <main class="main">
-      <header class="header" id="header"></header>
+      <!-- 홈 화면. 통계로 이동해도 숨기기만 하므로 카메라 영상·스트림은 그대로 유지된다. -->
+      <section class="view" data-view="home">
+      <header class="page-head" id="header"></header>
 
-      <div class="dashboard">
-        <div class="col col--main">
-          <div id="camera"></div>
-          <!-- 나쁜 자세 알림: state.alert가 있을 때만 표시됨 -->
-          <div id="alert" hidden></div>
+      <div class="home-grid">
+        <div class="home-grid__camera" id="camera"></div>
+        <div class="home-grid__side">
           <div id="posture-status"></div>
-          <div class="row-2">
-            <div id="stats"></div>
-            <div id="history"></div>
-          </div>
+          <div id="measure-time"></div>
         </div>
-
-        <div class="col col--side">
-          <div id="frequency"></div>
-          <div class="side-stack">
-            <div id="tips"></div>
-            <div id="notify"></div>
-          </div>
-        </div>
+        <div class="home-grid__wide" id="notify"></div>
+        <div class="home-grid__wide" id="tips"></div>
       </div>
+      <!-- 나쁜 자세 알림 배너: state.alert가 있을 때만 표시됨(현재 알림 흐름에서는 사용하지 않음) -->
+      <div id="alert" hidden></div>
+      </section>
+
+      <!-- 통계 화면 -->
+      <section class="view" data-view="stats" id="stats-page" hidden></section>
     </main>
   </div>
 

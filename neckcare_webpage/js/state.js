@@ -29,6 +29,24 @@ export function buildEmptyTrend(period, now = new Date()) {
 }
 
 export const initialState = {
+  // 현재 화면: 'home' | 'stats' (주소 #stats와 맞춘다. 화면 전환은 카메라·세션에 영향 없음)
+  view: 'home',
+
+  // 통계 화면 조회 상태. 값은 D 파트 조회 결과로만 채운다(stats-source.js 참고).
+  report: {
+    status: 'unavailable',  // unavailable | idle | loading | success | empty | error
+    attempted: false,       // "분석 결과 불러오기"를 한 번이라도 눌렀는지
+    period: 'week',         // today | week | month (화면 전환 후에도 유지)
+    countType: 'turtle',    // 요약 카드: turtle | shrimp
+    trendType: 'turtle',    // 추이 그래프: turtle | shrimp
+    trendUnit: 'day',       // day | week
+    recordFilter: 'all',    // all | turtle | shrimp
+    data: null,             // 마지막 정상 조회 결과(조회 실패 시에도 유지)
+    dataKey: null,          // data를 받은 조건 `${period}:${trendUnit}`
+    lastLoadedAt: null,
+    error: null,
+  },
+
   // 분석 세션 상태: 'idle'(대기) | 'running'(분석 중)
   analysis: { status: 'idle' },
 
@@ -37,10 +55,13 @@ export const initialState = {
 
   // 판정 결과 (팀 인터페이스 { ts, angle, status } 기준)
   // status: 'unknown'(측정 불가) | 'good' | 'warn' | 'bad'
-  posture: { ts: null, angle: null, status: 'unknown' },
+  // kind: 나쁜 자세 종류 'turtle' | 'waist' | null, reason: 'novis'(판정 불가) | 'recalibration'(다시 설정 필요) | null
+  // angle: B 판정에는 목 각도 값이 없어 null로 둔다(팀 합의)
+  posture: { ts: null, angle: null, status: 'unknown', kind: null, reason: null },
 
   // 누적 통계
   stats: {
+    measuredSec: null,  // 홈 "누적 측정 시간"(초). null = 측정 기록 없음(0과 구분)
     totalMinutes: 0,
     turtleCount: 0,
     turtleRate: 0,      // %

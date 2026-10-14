@@ -1,4 +1,4 @@
-import { initialState, createStore, buildEmptyTrend } from './state.js';
+import { initialState, createStore } from './state.js';
 import { showToast } from './ui/toast.js';
 import { startCamera, hasCamera } from './pose.js';
 import { startViewer } from './webrtc.js';
@@ -10,28 +10,32 @@ import { mountSidebar } from './components/Sidebar.js';
 import { mountHeader } from './components/Header.js';
 import { mountCameraPreview } from './components/CameraPreview.js';
 import { renderAlertBanner } from './components/AlertBanner.js';
-import { renderPostureStatus } from './components/PostureStatus.js';
-import { mountFrequencyChart } from './components/FrequencyChart.js';
-import { renderStatsOverview } from './components/StatCard.js';
-import { renderDetectionHistory } from './components/DetectionHistory.js';
+import { renderPostureStatus, renderMeasureTime } from './components/PostureStatus.js';
 import { renderPostureTips } from './components/PostureTips.js';
 import { mountNotifySettings } from './components/NotifySettings.js';
 import { createCalibration } from './calibration.js';
+import { mountStatsPage } from './components/StatsPage.js';
+import { registerStatsProvider, loadStats, hasStatsProvider } from './stats-source.js';
+import { createPostureAdapter } from './posture-adapter.js';
 
 const store = createStore(initialState);
 const $ = (id) => document.getElementById(id);
 
-mountSidebar($('sidebar'), {
+// 화면 전환(홈 ↔ 통계): 주소 #stats와 맞추고 새로고침 없이 영역만 숨긴다.
+// 카메라·초기 설정·알림·세션 코드는 호출하지 않는다(카메라 스트림 유지).
+const viewFromHash = () => (location.hash === '#stats' ? 'stats' : 'home');
+const sidebar = mountSidebar($('sidebar'), {
   onNavigate(item) {
-    if (item.id !== 'home') showToast(`'${item.label}' 메뉴는 준비 중입니다.`);
+    const hash = item.id === 'stats' ? '#stats' : '#home';
+    if (location.hash !== hash) location.hash = hash;
   },
 });
+window.addEventListener('hashchange', () => store.setState({ view: viewFromHash() }));
 
 const header = mountHeader($('header'));
 
-// [범위 제한] 카메라 연결(영상 표시)까지만 한다. MediaPipe Pose는 실행하지 않는다.
-// Pose 뼈대 표시가 다시 필요하면 pose.js의 startPoseOverlay(video, overlay)를 연결 직후 호출한다.
-// 각도 계산·거북목 판정·통계·실제 감지 알림은 별도 요청 전까지 연결하지 않는다.
+// 카메라 연결(영상 표시). 자세 판정은 B 모듈(js/b/)이 이 <video>를 그대로 읽는다(아래 "B 판정 모듈 연결").
+// pose.js의 startPoseOverlay(뼈대 표시)는 사용하지 않는다.
 let cameraSession = null;
 
 function onCameraConnected() {
@@ -89,14 +93,22 @@ const camera = mountCameraPreview($('camera'), {
   },
 });
 
-const frequency = mountFrequencyChart($('frequency'), {
-  onPeriodChange(period) {
-    // 지금은 빈 추이(모두 0)만 보여준다. 실제 조회는 storage.getStats()로 교체.
-    store.setState({ trend: { period, points: buildEmptyTrend(period) } });
+renderPostureTips($('tips'));
+
+// 통계 화면. 조회는 D 파트 모듈이 등록됐을 때만 실제로 일어난다(없으면 "연동 준비 중").
+const statsPage = mountStatsPage($('stats-page'), {
+  async onLoad() {
+    store.setState({ report: { attempted: true } });
+    const result = await loadStats(store);
+    if (result === 'unavailable') showToast('통계 데이터 연동 준비 중입니다.');
+    else if (result === 'error') showToast('분석 결과를 불러오지 못했어요. 이전 결과를 유지합니다.');
+  },
+  onChange(name, value) {
+    store.setState({ report: { [name]: value } });
+    // 기간·집계 단위가 바뀌면 그 조건으로 다시 조회한다(조회 모듈이 있을 때만).
+    if ((name === 'period' || name === 'trendUnit') && hasStatsProvider()) loadStats(store);
   },
 });
-
-renderPostureTips($('tips'));
 
 // 알림 미리보기: posture/stats/history는 건드리지 않고, 약 3초 뒤 스스로 정리된다.
 mountNotifySettings($('notify'), {
@@ -127,17 +139,20 @@ mountNotifySettings($('notify'), {
 syncExtensionLevel(loadNotifyLevel());
 
 function render(state) {
+  document.querySelectorAll('[data-view]').forEach((section) => {
+    section.hidden = section.dataset.view !== state.view;
+  });
+  sidebar.setActive(state.view);
+  statsPage.update(state);
   header.update(state);
   camera.update(state);
   renderAlertBanner($('alert'), state, { onDismiss: () => store.setState({ alert: null }) });
   renderPostureStatus($('posture-status'), state);
-  frequency.update(state);
-  renderStatsOverview($('stats'), state);
-  renderDetectionHistory($('history'), state);
+  renderMeasureTime($('measure-time'), state);
 }
 
 store.subscribe(render);
-render(store.getState());
+store.setState({ view: viewFromHash() });
 
 // 초기 자세 설정: 카메라 연결 성공(connected false→true) 시 시작, 해제(true→false) 시 즉시 중단.
 // 기존 카메라 연결·해제 코드는 건드리지 않고 상태 변화만 지켜본다.
@@ -145,23 +160,53 @@ const calibration = createCalibration({
   view: { show: (s) => camera.showCalibration(s), hide: () => camera.hideCalibration() },
   getVideo: () => camera.getElements().video,
   isCameraConnected: () => store.getState().camera.connected,
+  isViewActive: () => store.getState().view === 'home',
 });
 let cameraWasConnected = store.getState().camera.connected;
+let lastView = store.getState().view;
 store.subscribe((state) => {
   const connected = state.camera.connected;
-  if (connected === cameraWasConnected) return;
-  cameraWasConnected = connected;
-  if (connected) calibration.start();
-  else calibration.cancel();
+  if (connected !== cameraWasConnected) {
+    cameraWasConnected = connected;
+    if (connected) calibration.start();
+    else calibration.cancel();
+    // [연결 위치] D(저장) 파트 — 측정 세션 종료: connected true→false(카메라 OFF)에서 session.end() 호출 예정.
+    //   새 이벤트 받기 중단 → 마지막 구간 종료 시각 확정 → (스트림은 이미 종료됨) → 남은 기록 저장·endSession 비동기.
+  }
+  // 화면 전환: 통계로 가면 초기 설정만 잠시 멈추고(카메라 유지), 홈으로 돌아오면 다시 시작한다.
+  if (state.view !== lastView) {
+    lastView = state.view;
+    window.scrollTo(0, 0);
+    if (state.view === 'home') calibration.resume();
+    else calibration.suspend();
+  }
 });
 
+// B 판정 모듈 연결: B 결과는 posture-adapter.js가 화면 상태·알림으로 바꾼다.
+// 모듈(또는 MediaPipe CDN) 로딩에 실패하면 지금처럼 판정 없이 UI만 동작한다.
+// 등록은 다음 카메라 연결부터 적용되므로 페이지를 열자마자 불러온다.
+const postureAdapter = createPostureAdapter({ store });
+let bAnalyzer = null;
+import('./b/neckcare-analyzer.js')
+  .then(({ createNeckCareAnalyzer }) => {
+    bAnalyzer = createNeckCareAnalyzer({
+      recalibrateAfterNovisMs: 5 * 60 * 1000,   // 팀 합의: 판정 불가가 5분 이어지면 "초기자세 설정을 다시 해주세요"
+      onResult: postureAdapter.handleResult,
+      onError: postureAdapter.handleError,
+    });
+    calibration.registerAnalyzer(postureAdapter.wrap(bAnalyzer));
+  })
+  .catch((err) => console.error('[neckcare] 자세 판정 모듈을 불러오지 못했습니다. 판정 없이 동작합니다.', err));
+
 // 다른 파트(A·B·D)가 통합 시 접근할 수 있도록 노출한다.
-// 예: window.neckcare.store.setState({ posture: { ts: Date.now(), angle: 12, status: 'good' } })
-// 실제 거북목 알림: 판정 파트가 거북목이면 alerts.start(), 정상 자세로 돌아오면 alerts.stop()을 호출한다.
+// 판정 결과는 B 모듈 → posture-adapter.js → store.posture / alerts 로 자동 연결된다.
 // 판정 모듈 등록: neckcare.registerAnalyzer({ beginBaseline, finishBaseline, start, stop }) — calibration.js 참고
+// 통계 조회 모듈 등록: neckcare.registerStatsProvider({ query({ period, unit, asOf }) }) — stats-source.js 참고
 window.neckcare = {
   store,
   camera,
   alerts: { start: startPostureAlert, stop: stopPostureAlert },
   registerAnalyzer: calibration.registerAnalyzer,
+  registerStatsProvider,
+  getAnalyzer: () => bAnalyzer,   // 디버그용: neckcare.getAnalyzer().getDebug()
 };

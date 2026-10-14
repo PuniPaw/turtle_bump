@@ -15,6 +15,9 @@ const PATHS = {
   hourglass: '<path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/>',
   history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  download: '<path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>',
+  chevronDown: '<path d="m6 9 6 6 6-6"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
   monitor: '<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>',
   alarmClock: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M5 3 2 6"/><path d="m22 6-3-3"/><path d="M6.38 18.7 4 21"/><path d="M17.64 18.67 20 21"/>',
   personStanding: '<circle cx="12" cy="5" r="1"/><path d="m9 20 3-6 3 6"/><path d="m6 8 6 2 6-2"/><path d="M12 10v4"/>',
@@ -33,4 +36,23 @@ const PATHS = {
 export function icon(name, { size = 20, className = '' } = {}) {
   const body = PATHS[name] ?? '';
   return `<svg class="icon ${className}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+}
+
+// 홈 화면용 보라 등껍질 거북이 일러스트(사이드바·알림 강도 카드). 장식용이다.
+export function turtleArt({ width = 60, className = '' } = {}) {
+  return `<svg class="turtle-art ${className}" width="${width}" viewBox="0 0 122 84" aria-hidden="true">
+    <defs><linearGradient id="turtleShell" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b9a8ff"/><stop offset="1" stop-color="#7a61e6"/></linearGradient></defs>
+    <ellipse cx="56" cy="76" rx="42" ry="5" fill="#2a2640" opacity=".07"/>
+    <path d="M10 56 L2 61 L12 62 Z" fill="#6fd6ae"/>
+    <rect x="22" y="56" width="15" height="17" rx="7.5" fill="#6fd6ae"/>
+    <rect x="64" y="56" width="15" height="17" rx="7.5" fill="#6fd6ae"/>
+    <path d="M10 58 Q12 16 50 14 Q88 16 92 58 Z" fill="url(#turtleShell)"/>
+    <path d="M8 58 H94" stroke="#6650d6" stroke-width="5" stroke-linecap="round"/>
+    <path d="M38 22 L31 39 L51 49 L71 39 L64 22 M31 39 L16 48 M71 39 L86 48 M51 49 V56" stroke="#d6ccff" stroke-width="2.6" fill="none" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="100" cy="38" r="18" fill="#7fe0bb"/>
+    <circle cx="94" cy="35" r="3.2" fill="#1f2a24"/><circle cx="106" cy="35" r="3.2" fill="#1f2a24"/>
+    <circle cx="95" cy="34" r="1.1" fill="#fff"/><circle cx="107" cy="34" r="1.1" fill="#fff"/>
+    <path d="M95 43 Q100 47.5 105 43" stroke="#1f2a24" stroke-width="1.9" fill="none" stroke-linecap="round"/>
+    <circle cx="89.5" cy="42" r="2.6" fill="#ff9fb4" opacity=".75"/><circle cx="110.5" cy="42" r="2.6" fill="#ff9fb4" opacity=".75"/>
+  </svg>`;
 }

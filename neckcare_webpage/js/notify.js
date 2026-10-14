@@ -31,9 +31,23 @@ export const DEFAULT_NOTIFY_LEVEL = 'medium';
 const STORAGE_KEY = 'neckcare.notifyLevel';
 const PREVIEW_MS = 3000;
 
+// 실제 감지 알림 문구(자세 종류별). kind: 'turtle'(거북목) | 'waist'(허리 굽음)
 const LIVE_TEXT = {
-  title: '거북목 자세가 감지되었어요',
-  message: '고개를 들고 어깨를 펴 주세요. 바른 자세로 돌아오면 알림이 사라져요.',
+  turtle: {
+    title: '거북목 자세가 감지되었어요',
+    message: '고개를 들고 어깨를 펴 주세요. 바른 자세로 돌아오면 알림이 사라져요.',
+  },
+  waist: {
+    title: '허리 굽음 자세가 감지되었어요',
+    message: '허리를 펴고 등을 의자에 기대 주세요. 바른 자세로 돌아오면 알림이 사라져요.',
+  },
+};
+const ALERT_KINDS = Object.keys(LIVE_TEXT);
+
+// 자세 판정이 오래 불가능할 때의 안내(거북이 없이 중앙 상단 경고창만)
+const NOTICE_TEXT = {
+  title: '자세 판단이 어렵습니다!',
+  message: '초기자세 설정을 다시 해주세요.',
 };
 
 export function isNotifyLevel(value) {
@@ -119,13 +133,16 @@ export function syncExtensionLevel(level) {
 window.addEventListener('message', (e) => {
   if (e.source !== window || e.data?.source !== 'neckcare-extension' || e.data.type !== 'hello') return;
   syncExtensionLevel(loadNotifyLevel());
-  if (live) postToExtension({ type: 'alert', active: true, level: live.level });
+  if (live) postToExtension({ type: 'alert', active: true, level: live.level, kind: live.kind });
 });
 
 // ---- 화면 오버레이(경고창 + 거북이) -------------------------------------------
 const overlay = globalThis.NeckCareAlertOverlay.create();
-let live = null;          // 실제 감지 알림 중이면 { level }
+let live = null;          // 실제 감지 알림 중이면 { level, kind }
+let notice = false;       // "자세 판단이 어렵습니다" 안내 중인지
 let previewTimer = null;  // 미리보기 중이면 타이머 id
+
+const liveText = () => LIVE_TEXT[live?.kind] ?? LIVE_TEXT.turtle;
 
 function paintOverlay(level, text) {
   const conf = NOTIFY_LEVELS[level];
@@ -137,7 +154,8 @@ function paintOverlay(level, text) {
 }
 
 function paintLive() {
-  if (live) paintOverlay(live.level, LIVE_TEXT);
+  if (live) paintOverlay(live.level, liveText());
+  else if (notice) overlay.show({ count: 0, title: NOTICE_TEXT.title, message: NOTICE_TEXT.message });
   else overlay.hide();
 }
 
@@ -154,27 +172,49 @@ export async function previewNotification(level, { title, message }) {
   return { system: await showSystemNotification(title, message) };
 }
 
-// 실제 감지 알림 시작.
-//   - 같은 강도로 이미 켜져 있으면 아무것도 하지 않는다(거북이 유지, Windows 알림·확장 프로그램 메시지 없음).
-//   - 다른 강도로 켜져 있으면 강도만 바꾸고 Windows 알림은 다시 보내지 않는다.
+// 실제 감지 알림 시작. kind: 'turtle'(거북목) | 'waist'(허리 굽음). 생략하면 현재 종류 유지(처음이면 거북목).
+//   - 같은 강도·같은 종류로 이미 켜져 있으면 아무것도 하지 않는다(거북이 유지, Windows 알림·확장 프로그램 메시지 없음).
+//   - 종류만 바뀌면 경고창 문구만 바꾼다(거북이 유지, Windows 알림은 다시 보내지 않음).
+//   - 강도가 바뀌면 그 강도로 다시 표시한다(Windows 알림은 다시 보내지 않음).
 // Windows 알림 권한은 미리보기 등 사용자 클릭으로 먼저 허용받아 두어야 한다.
-export async function startPostureAlert(level = loadNotifyLevel()) {
+export async function startPostureAlert(level = loadNotifyLevel(), { kind } = {}) {
   const lv = normalizeLevel(level);
-  if (live && live.level === lv) return { system: 'skipped' };
+  const k = ALERT_KINDS.includes(kind) ? kind : (live?.kind ?? 'turtle');
+  if (live && live.level === lv && live.kind === k) return { system: 'skipped' };
   const wasActive = Boolean(live);
-  live = { level: lv };
-  if (!previewTimer) paintLive();
-  postToExtension({ type: 'alert', active: true, level: lv });
+  const onlyKindChanged = wasActive && live.level === lv;
+  live = { level: lv, kind: k };
+  notice = false;
+  if (!previewTimer) {
+    if (onlyKindChanged && NOTIFY_LEVELS[lv].channels.overlay) overlay.update(liveText());
+    else paintLive();
+  }
+  postToExtension({ type: 'alert', active: true, level: lv, kind: k });
   if (wasActive) return { system: 'skipped' };
-  return { system: await showSystemNotification(LIVE_TEXT.title, LIVE_TEXT.message) };
+  const text = liveText();
+  return { system: await showSystemNotification(text.title, text.message) };
 }
 
 // 정상 자세로 돌아왔을 때: 거북이·경고창을 모두 정리한다.
 export function stopPostureAlert() {
   if (!live) return;
   live = null;
-  if (!previewTimer) overlay.hide();
+  if (!previewTimer) paintLive();
   postToExtension({ type: 'alert', active: false });
+}
+
+// "자세 판단이 어렵습니다! 초기자세 설정을 다시 해주세요" 안내(이 페이지의 중앙 상단 경고창).
+// 자세 경고는 호출하는 쪽에서 먼저 stopPostureAlert()로 끈다.
+export function showRecalibrationNotice() {
+  if (notice) return;
+  notice = true;
+  if (!previewTimer && !live) paintLive();
+}
+
+export function hideRecalibrationNotice() {
+  if (!notice) return;
+  notice = false;
+  if (!previewTimer && !live) paintLive();
 }
 
 export function isPostureAlertActive() {

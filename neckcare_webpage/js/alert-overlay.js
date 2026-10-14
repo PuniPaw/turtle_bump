@@ -266,6 +266,13 @@
           }, BUBBLE_INTERVAL_MS);
         }
       },
+      // 보이는 중일 때 경고창 문구만 바꾼다(거북이는 그대로 이어서 움직임).
+      update({ title = '', message = '' } = {}) {
+        if (!host || !host.isConnected || !alertBox) return;
+        alertBox.querySelector('.alert__title').textContent = title;
+        alertBox.querySelector('.alert__message').textContent = message;
+        alertBox.hidden = !title;
+      },
       // 거북이·경고창·애니메이션 루프·타이머를 모두 정리하고 오버레이를 페이지에서 뗀다.
       hide() {
         clearTurtles();
