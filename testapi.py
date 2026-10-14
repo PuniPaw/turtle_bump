@@ -7,7 +7,7 @@ BASE_URL = "http://127.0.0.1:5000/api"
 # 1. 세션 생성
 print("===== 1. 세션 생성 =====")
 
-start = int(time.time() * 1000)
+start = int(time.time() * 1000) - 10000
 
 response = requests.post(
     f"{BASE_URL}/sessions",
