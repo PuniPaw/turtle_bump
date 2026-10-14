@@ -1,7 +1,9 @@
+
 import { initialState, createStore, buildEmptyTrend } from './state.js';
 import { showToast } from './ui/toast.js';
 import { startCamera, hasCamera, startPoseOverlay } from './pose.js';
 import { startViewer } from './webrtc.js';
+import { beginMonitoring, receivePostureEvent, finishMonitoring, getSaveStatus } from './dbbridge.js';
 import { loadNotifyLevel, saveNotifyLevel, runNotification } from './notify.js';
 import { mountSidebar } from './components/Sidebar.js';
 import { mountHeader } from './components/Header.js';
@@ -12,7 +14,7 @@ import { mountFrequencyChart } from './components/FrequencyChart.js';
 import { renderStatsOverview } from './components/StatCard.js';
 import { renderDetectionHistory } from './components/DetectionHistory.js';
 import { renderPostureTips } from './components/PostureTips.js';
-import { mountNotifySettings } from './components/NotifySetting.js';
+import { mountNotifySettings } from './components/NotifySettings.js';
 
 const store = createStore(initialState);
 const $ = (id) => document.getElementById(id);
@@ -56,9 +58,15 @@ function detachPoseOverlay() {
   camera.setPoseStatus('미연결');
 }
 
-function onCameraConnected() {
+async function onCameraConnected() {
   store.setState({ camera: { connected: true, error: null } });
   attachPoseOverlay();
+  try {
+    await beginMonitoring();
+  } catch (err) {
+    console.error('[D] 세션 생성 실패:', err);
+    showToast(`DB 세션 생성 실패: ${err.message}`);
+  }
 }
 
 const camera = mountCameraPreview($('camera'), {
@@ -70,7 +78,7 @@ const camera = mountCameraPreview($('camera'), {
     if (await hasCamera()) {
       try {
         cameraSession = await startCamera(video);
-        onCameraConnected();
+        await onCameraConnected();
       } catch (err) {
         console.error(err);
         store.setState({ camera: { connected: false, error: err.message } });
@@ -93,7 +101,7 @@ const camera = mountCameraPreview($('camera'), {
       },
       onConnected() {
         camera.hideViewerWait();
-        onCameraConnected();
+        void onCameraConnected();
       },
       onError(err) {
         console.error(err);
@@ -105,7 +113,14 @@ const camera = mountCameraPreview($('camera'), {
       },
     });
   },
-  onDisconnectClick() {
+  async onDisconnectClick() {
+    // 마지막 자세 구간이 있다면 먼저 receivePostureEvent로 전달해야 한다.
+    try {
+      await finishMonitoring('camera_off');
+    } catch (err) {
+      console.error('[D] 세션 종료 실패:', err);
+      showToast(`DB 저장/종료 실패: ${err.message}`);
+    }
     detachPoseOverlay();
     cameraSession?.stop();
     cameraSession = null;
@@ -173,4 +188,6 @@ render(store.getState());
 
 // 다른 파트(A·B·D)가 통합 시 접근할 수 있도록 노출한다.
 // 예: window.neckcare.store.setState({ posture: { ts: Date.now(), angle: 12, status: 'good' } })
-window.neckcare = { store, camera };
+// B 담당 자세 판정기가 완료된 구간을 만들면 이 함수로 전달한다.
+// 예: window.neckcare.receivePostureEvent({state:'TURTLE', started_at_ms:start, ended_at_ms:end, alert_triggered:true})
+window.neckcare = { store, camera, receivePostureEvent, getSaveStatus };
