@@ -1,5 +1,13 @@
-// NeckCare D 담당 - stats.js
-// 역할: 측정 기록을 C 담당 UI에 필요한 통계 데이터로 변환
+// ============================================================
+// stats.js
+// D 담당: 측정 데이터 통계 처리
+//
+// 1. 자세 상태별 판정 건수
+// 2. 거북목 / 허리 굽힘 발생 구간
+// 3. 평균 및 최장 지속 시간
+// 4. 최근 1시간 / 오늘 / 7일 그래프
+// 5. 감지 이력 및 CSV 다운로드
+// ============================================================
 
 import {
     getSession,
@@ -7,36 +15,51 @@ import {
     listSessions
 } from "./storage.js";
 
-import { buildEmptyTrend } from "./state.js";
+import {
+    buildEmptyTrend
+} from "./state.js";
 
 
-// 샘플 사이 간격이 3초를 초과하면
-// 카메라 끊김 또는 측정 중단으로 간주
+// ------------------------------------------------------------
+// 1. 기본 설정
+// ------------------------------------------------------------
+
+// 연속 측정 간격이 3초를 넘으면 다른 구간으로 판단
 const MAX_GAP_MS = 3000;
 
+// 유효한 자세 판정
+const VALID_STATUSES = new Set([
+    "GOOD",
+    "TURTLE",
+    "WAIST",
+    "CLOSE"
+]);
 
-// --------------------------------------------------
-// 1. 측정 기록 시간순 정렬
-// --------------------------------------------------
+
+// ------------------------------------------------------------
+// 2. 시간순 데이터 정렬
+// ------------------------------------------------------------
 
 function sortEvents(events) {
 
+    // 원본 배열은 변경하지 않고 복사 후 정렬
     return [...events].sort(
         (a, b) => a.ts - b.ts
     );
 }
 
 
-// --------------------------------------------------
-// 2. 자세 상태별 측정 건수
-// --------------------------------------------------
+// ------------------------------------------------------------
+// 3. 자세 상태별 판정 건수
+// ------------------------------------------------------------
 
 export function countStatuses(events) {
 
     const counts = {
-        good: 0,
-        warn: 0,
-        bad: 0
+        GOOD: 0,
+        TURTLE: 0,
+        WAIST: 0,
+        CLOSE: 0
     };
 
     for (const event of events) {
@@ -50,21 +73,28 @@ export function countStatuses(events) {
 }
 
 
-// --------------------------------------------------
-// 3. 연속된 자세 상태를 구간으로 묶기
-// --------------------------------------------------
+// ------------------------------------------------------------
+// 4. 연속된 자세 판정을 구간으로 묶기
+// ------------------------------------------------------------
 
-export function buildDetectionHistory(events) {
+export function buildPostureGroups(events) {
 
     const sorted = sortEvents(events);
+
     const groups = [];
 
     let current = null;
 
     for (const event of sorted) {
 
-        // 이전 데이터가 없거나 상태가 달라진 경우
-        // 또는 3초 이상 측정이 끊긴 경우 새 구간 시작
+        // 인식 불가 / 보정 / 대기 상태는
+        // 연속 자세 판정 구간을 끊음
+        if (!VALID_STATUSES.has(event.status)) {
+
+            current = null;
+            continue;
+        }
+
         const newGroup =
             current === null ||
             current.status !== event.status ||
@@ -72,102 +102,137 @@ export function buildDetectionHistory(events) {
 
         if (newGroup) {
 
+            // 새로운 자세 판정 구간 생성
             current = {
                 ts: event.ts,
                 lastTs: event.ts,
-                status: event.status
+                status: event.status,
+                sampleCount: 1
             };
 
             groups.push(current);
 
         } else {
 
-            // 같은 자세가 연속되면 종료 시각 갱신
+            // 같은 자세가 이어지는 경우
             current.lastTs = event.ts;
+            current.sampleCount++;
         }
     }
 
-    // C 담당 UI의 history 데이터 형식으로 변환
+    // 각 구간의 지속 시간 계산
     return groups.map(group => ({
 
         ts: group.ts,
 
         status: group.status,
 
-        // 첫 샘플부터 마지막 샘플까지 관측된 시간
+        // 최초 측정과 마지막 측정 사이의 시간
+        // 단일 샘플은 0초로 계산
         durationSec: Number(
             (
                 (group.lastTs - group.ts) / 1000
             ).toFixed(1)
-        )
+        ),
+
+        sampleCount: group.sampleCount
+    }));
+}
+
+
+// ------------------------------------------------------------
+// 5. C 담당 감지 기록 형식으로 변환
+// ------------------------------------------------------------
+
+export function buildDetectionHistory(events) {
+
+    const groups = buildPostureGroups(events);
+
+    // C 담당 UI에서 사용하는 상태값
+    const statusMap = {
+        GOOD: "good",
+        TURTLE: "bad",
+        WAIST: "bad",
+        CLOSE: "warn"
+    };
+
+    // 최근 기록이 위에 오도록 역순 정렬
+    return groups.map(group => ({
+
+        ts: group.ts,
+
+        durationSec: group.durationSec,
+
+        status: statusMap[group.status]
 
     })).reverse();
 }
 
 
-// --------------------------------------------------
-// 4. C 담당 통계 카드용 데이터
-// --------------------------------------------------
+// ------------------------------------------------------------
+// 6. C 담당 통계 카드 데이터 계산
+// ------------------------------------------------------------
 
 export function buildDashboardStats(session) {
 
     const events = sortEvents(session.events);
 
-    // 종료된 세션은 종료 시각,
-    // 진행 중인 세션은 현재 시각 사용
+    const counts = countStatuses(events);
+
+    // 측정 종료 전이면 현재 시각을 종료 시각으로 사용
     const endTime = session.endTime ?? Date.now();
 
-    // 측정 시작부터 현재 또는 종료까지 경과 시간
+    // 전체 세션 경과 시간(분)
     const totalMinutes = Math.max(
         0,
         (endTime - session.startTime) / 60000
     );
 
-    // 연속된 자세 상태 구간 계산
-    const history = buildDetectionHistory(events);
+    // 통계에 포함할 유효 판정 수
+    const totalValid =
+        counts.GOOD +
+        counts.TURTLE +
+        counts.WAIST +
+        counts.CLOSE;
 
-    // bad 구간만 추출
-    const badGroups = history.filter(
-        item => item.status === "bad"
+    const groups = buildPostureGroups(events);
+
+    // 거북목 상태로 판정된 구간만 선택
+    const turtleGroups = groups.filter(
+        group => group.status === "TURTLE"
     );
 
     // 거북목 발생 횟수
-    const turtleCount = badGroups.length;
+    const turtleCount = turtleGroups.length;
 
-    // 각 bad 구간의 지속 시간
-    const durations = badGroups.map(
-        item => item.durationSec
+    // 각 거북목 구간의 지속 시간
+    const durations = turtleGroups.map(
+        group => group.durationSec
     );
 
-    // bad 구간의 총 관측 시간
-    const totalBadSeconds = durations.reduce(
+    const totalDuration = durations.reduce(
         (sum, value) => sum + value,
         0
     );
 
     // 평균 지속 시간
-    const avgDurationSec = turtleCount
-        ? totalBadSeconds / turtleCount
+    const avgDurationSec = turtleCount > 0
+        ? totalDuration / turtleCount
         : 0;
 
-    // 가장 길었던 지속 시간
-    const maxDurationSec = turtleCount
+    // 최장 지속 시간
+    const maxDurationSec = durations.length > 0
         ? Math.max(...durations)
         : 0;
 
-    // 자세 상태별 판정 건수
-    const counts = countStatuses(events);
-
-    const totalCount =
-        counts.good + counts.warn + counts.bad;
-
-    // bad 판정 건수 / 전체 유효 판정 건수
-    // 약 1초 간격으로 수집한다는 전제의 근사 비율
-    const turtleRate = totalCount
-        ? counts.bad / totalCount * 100
+    // 유효 판정 중 거북목 판정 비율
+    const turtleRate = totalValid > 0
+        ? counts.TURTLE / totalValid * 100
         : 0;
 
+    // C 담당 state.js와 동일한 구조
     return {
+
         totalMinutes: Number(
             totalMinutes.toFixed(1)
         ),
@@ -186,14 +251,66 @@ export function buildDashboardStats(session) {
             maxDurationSec.toFixed(1)
         ),
 
-        hasRecords: events.length > 0
+        hasRecords: totalValid > 0
     };
 }
 
 
-// --------------------------------------------------
-// 5. 시간별 발생 빈도 그래프
-// --------------------------------------------------
+// ------------------------------------------------------------
+// 7. B 담당의 추가 판정 통계
+// ------------------------------------------------------------
+
+export function buildExtraStats(session) {
+
+    const events = session.events;
+
+    const counts = countStatuses(events);
+
+    const groups = buildPostureGroups(events);
+
+    const totalValid = Object.values(counts).reduce(
+        (sum, value) => sum + value,
+        0
+    );
+
+    // 허리 굽힘 발생 구간 수
+    const waistCount = groups.filter(
+        group => group.status === "WAIST"
+    ).length;
+
+    // 화면 접근 발생 구간 수
+    const closeCount = groups.filter(
+        group => group.status === "CLOSE"
+    ).length;
+
+    // 허리 굽힘 비율
+    const waistRate = totalValid > 0
+        ? counts.WAIST / totalValid * 100
+        : 0;
+
+    // 화면 접근 비율
+    const closeRate = totalValid > 0
+        ? counts.CLOSE / totalValid * 100
+        : 0;
+
+    return {
+        waistCount,
+        closeCount,
+
+        waistRate: Number(
+            waistRate.toFixed(1)
+        ),
+
+        closeRate: Number(
+            closeRate.toFixed(1)
+        )
+    };
+}
+
+
+// ------------------------------------------------------------
+// 8. 기간별 거북목 발생 비율 그래프
+// ------------------------------------------------------------
 
 export function buildDashboardTrend(
     events,
@@ -201,53 +318,72 @@ export function buildDashboardTrend(
 ) {
 
     const now = new Date();
+
     const nowMs = now.getTime();
 
-    // C 담당 state.js에서 사용하는 기간 값
-    const validPeriods = ["hour", "today", "week"];
-
-    if (!validPeriods.includes(period)) {
+    // C 담당 그래프에서 사용하는 기간
+    if (!["hour", "today", "week"].includes(period)) {
         period = "hour";
     }
 
-    // C 담당이 정한 그래프 축 생성
-    // hour: 13개, today: 13개, week: 7개
+    // C 담당이 만든 그래프 축 생성 함수 사용
     const points = buildEmptyTrend(period, now);
 
-    const counts = points.map(() => ({
+    // 각 시간 구간의 판정 건수
+    const buckets = points.map(() => ({
         total: 0,
-        bad: 0
+        turtle: 0
     }));
 
-    // 오늘 자정
+    // 오늘 00:00
     const todayStart = new Date(
         now.getFullYear(),
         now.getMonth(),
         now.getDate()
     ).getTime();
 
-    // 6일 전 자정: 오늘 포함 총 7일
+    // 6일 전 00:00
     const weekStart = new Date(
         now.getFullYear(),
         now.getMonth(),
         now.getDate() - 6
     ).getTime();
 
+    // 날짜 비교용 함수
+    // 일광절약시간제 변경에도 날짜 차이가 정확하도록
+    // UTC 기준의 달력 날짜 번호 사용
+    function dayNumber(date) {
+
+        return Date.UTC(
+            date.getFullYear(),
+            date.getMonth(),
+            date.getDate()
+        ) / 86400000;
+    }
+
     for (const event of events) {
+
+        // GOOD / TURTLE / WAIST / CLOSE만 사용
+        if (!VALID_STATUSES.has(event.status)) {
+            continue;
+        }
+
+        // 미래 시각의 데이터 제외
+        if (event.ts > nowMs) {
+            continue;
+        }
 
         let index = -1;
 
-        // 미래 데이터는 통계에서 제외
-        if (event.ts > nowMs) continue;
-
         if (period === "hour") {
 
-            // 현재로부터 몇 분 전인지 계산
             const age = nowMs - event.ts;
 
+            // 최근 1시간 이내 데이터
             if (age >= 0 && age <= 3600000) {
 
-                // 5분 단위로 13개 지점에 분류
+                // C의 13개 표시 지점 중
+                // 5분 간격 구간에 배정
                 index = Math.min(
                     12,
                     Math.floor(
@@ -260,86 +396,79 @@ export function buildDashboardTrend(
 
             if (event.ts >= todayStart) {
 
-                // 00~01시 = 0번
-                // 02~03시 = 1번 ...
-                // 22~23시 = 11번
-                index = Math.floor(
-                    new Date(event.ts).getHours() / 2
-                );
+                // 00~01시 → 0번
+                // 02~03시 → 1번
+                // ...
+                // 22~23시 → 11번
+                const hour = new Date(
+                    event.ts
+                ).getHours();
+
+                index = Math.floor(hour / 2);
             }
 
         } else if (period === "week") {
 
             if (event.ts >= weekStart) {
 
-                const d = new Date(event.ts);
-
-                // 일광절약시간 변경에도 날짜 차이를
-                // 안정적으로 계산하기 위해 달력 날짜 사용
-                const dayNumber = Date.UTC(
-                    d.getFullYear(),
-                    d.getMonth(),
-                    d.getDate()
-                ) / 86400000;
-
-                const first = new Date(weekStart);
-
-                const firstNumber = Date.UTC(
-                    first.getFullYear(),
-                    first.getMonth(),
-                    first.getDate()
-                ) / 86400000;
-
-                index = dayNumber - firstNumber;
+                // 최근 7일의 날짜별 구간
+                index = dayNumber(
+                    new Date(event.ts)
+                ) - dayNumber(
+                    new Date(weekStart)
+                );
             }
         }
 
-        if (index < 0 || index >= counts.length) {
+        // 기간에 포함되지 않은 데이터 제외
+        if (
+            index < 0 ||
+            index >= buckets.length
+        ) {
             continue;
         }
 
-        counts[index].total++;
+        buckets[index].total++;
 
-        if (event.status === "bad") {
-            counts[index].bad++;
+        if (event.status === "TURTLE") {
+            buckets[index].turtle++;
         }
     }
 
-    // 각 시간 구간의 bad 비율 계산
+    // C 담당 그래프가 사용하는 label/rate 형식
     return {
         period,
 
-        points: points.map((point, i) => ({
+        points: points.map((point, index) => {
 
-            label: point.label,
+            const bucket = buckets[index];
 
-            rate: counts[i].total
-                ? Number(
-                    (
-                        counts[i].bad /
-                        counts[i].total * 100
-                    ).toFixed(1)
-                )
-                : 0
-        }))
+            const rate = bucket.total > 0
+                ? bucket.turtle / bucket.total * 100
+                : 0;
+
+            return {
+                label: point.label,
+                rate: Number(rate.toFixed(1))
+            };
+        })
     };
 }
 
 
-// --------------------------------------------------
-// 6. 특정 세션의 통계 조회
-// --------------------------------------------------
+// ------------------------------------------------------------
+// 9. 서버에 저장된 통계 조회
+// ------------------------------------------------------------
 
 export async function getStatsSummary(sessionId) {
 
-    // Flask에서 계산한 기본 통계
     return getStats(sessionId);
 }
 
 
-// --------------------------------------------------
-// 7. 특정 세션의 대시보드 통계 조회
-// --------------------------------------------------
+// ------------------------------------------------------------
+// 10. 대시보드 통계 조회
+// ------------------------------------------------------------
 
 export async function getDashboardStats(sessionId) {
 
@@ -349,9 +478,9 @@ export async function getDashboardStats(sessionId) {
 }
 
 
-// --------------------------------------------------
-// 8. 특정 세션의 그래프 데이터 조회
-// --------------------------------------------------
+// ------------------------------------------------------------
+// 11. 그래프 데이터 조회
+// ------------------------------------------------------------
 
 export async function getTrendData(
     sessionId,
@@ -367,9 +496,9 @@ export async function getTrendData(
 }
 
 
-// --------------------------------------------------
-// 9. 최근 감지 기록 조회
-// --------------------------------------------------
+// ------------------------------------------------------------
+// 12. 감지 기록 조회
+// ------------------------------------------------------------
 
 export async function getDetectionHistory(sessionId) {
 
@@ -381,67 +510,83 @@ export async function getDetectionHistory(sessionId) {
 }
 
 
-// --------------------------------------------------
-// 10. 과거 측정 세션 목록 조회
-// --------------------------------------------------
+// ------------------------------------------------------------
+// 13. 과거 측정 세션 목록 조회
+// ------------------------------------------------------------
 
 export async function getSessionHistory() {
 
-    const sessions = await listSessions();
-
-    return sessions.map(session => ({
-
-        sessionId: session.sessionId,
-
-        startTime: new Date(
-            session.startTime
-        ).toLocaleString(),
-
-        endTime: session.endTime === null
-            ? "측정 중"
-            : new Date(
-                session.endTime
-            ).toLocaleString(),
-
-        totalEvents: session.totalEvents
-    }));
+    return listSessions();
 }
 
 
-// --------------------------------------------------
-// 11. 측정 데이터 CSV 다운로드
-// --------------------------------------------------
+// ------------------------------------------------------------
+// 14. CSV 파일 다운로드
+// ------------------------------------------------------------
 
 export async function exportSessionCSV(sessionId) {
 
     const session = await getSession(sessionId);
 
-    const lines = [
-        "time,angle,status",
-
-        ...session.events.map(event =>
-            `${new Date(event.ts).toISOString()},${event.angle},${event.status}`
-        )
+    // CSV 첫 번째 줄: 컬럼명
+    const header = [
+        "time",
+        "status",
+        "fwd",
+        "appr",
+        "drop",
+        "dist",
+        "yaw",
+        "pitch",
+        "neck"
     ];
 
-    // Excel에서 한글 및 UTF-8 문자 깨짐 방지
+    // 측정 데이터를 CSV 행으로 변환
+    const rows = session.events.map(event => [
+
+        new Date(event.ts).toISOString(),
+
+        event.status,
+
+        event.fwd ?? "",
+        event.appr ?? "",
+        event.drop ?? "",
+        event.dist ?? "",
+        event.yaw ?? "",
+        event.pitch ?? "",
+        event.neck ?? ""
+    ]);
+
+    const csv = [
+        header.join(","),
+        ...rows.map(row => row.join(","))
+    ].join("\r\n");
+
+    // 엑셀에서 UTF-8 문자가 깨지지 않도록 BOM 추가
     const blob = new Blob(
-        ["\uFEFF" + lines.join("\r\n")],
-        { type: "text/csv;charset=utf-8" }
+        ["\uFEFF" + csv],
+        {
+            type: "text/csv;charset=utf-8"
+        }
     );
 
     const url = URL.createObjectURL(blob);
 
+    // 브라우저 다운로드 링크 생성
     const link = document.createElement("a");
 
     link.href = url;
     link.download = `neckcare_${sessionId}.csv`;
 
     document.body.appendChild(link);
+
+    // 자동 다운로드 실행
     link.click();
+
+    // 임시 링크 제거
     link.remove();
 
-    // 임시 다운로드 URL 해제
+    // 임시 URL 해제
     setTimeout(() => {
         URL.revokeObjectURL(url);
     }, 1000);
