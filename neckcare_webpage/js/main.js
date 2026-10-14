@@ -1,3 +1,4 @@
+import { TEST_MODE } from './test-mode.js';   // 반드시 첫 import(?mock=1일 때만 Mock 서버 주소로 전환)
 import { initialState, createStore } from './state.js';
 import { showToast } from './ui/toast.js';
 import { startCamera, hasCamera } from './pose.js';
@@ -17,6 +18,8 @@ import { createCalibration } from './calibration.js';
 import { mountStatsPage } from './components/StatsPage.js';
 import { registerStatsProvider, loadStats, hasStatsProvider } from './stats-source.js';
 import { createPostureAdapter } from './posture-adapter.js';
+import { createSessionRecorder } from './session-recorder.js';
+import { getStats, getHomeSummary } from './backend-api.js';
 
 const store = createStore(initialState);
 const $ = (id) => document.getElementById(id);
@@ -154,6 +157,48 @@ function render(state) {
 store.subscribe(render);
 store.setState({ view: viewFromHash() });
 
+// ---- D 백엔드 연동(API 명세서 v0.3.3) -----------------------------------------
+// 저장: session-recorder.js가 세션·자세 이벤트를 만들어 보낸다(전송 시점: 통계 갱신 직전·카메라 OFF·pagehide).
+// 조회: 통계 화면은 registerStatsProvider, 홈 누적 측정 시간은 /summary/home.
+// 백엔드가 꺼져 있으면 카메라·판정·알림은 그대로 동작하고 저장·통계만 실패로 표시된다.
+let endFailNotified = false;
+const recorder = createSessionRecorder({
+  onStatus(type, info) {
+    if (type === 'session_failed') {
+      showToast('DB 서버에 연결하지 못해 이번 측정은 저장되지 않아요. 카메라와 자세 알림은 계속 동작해요.', { duration: 5000 });
+    } else if (type === 'end_failed' && !info.final && !endFailNotified) {
+      endFailNotified = true;
+      showToast('측정 종료 기록을 저장하지 못해 같은 내용으로 다시 시도하고 있어요.', { duration: 5000 });
+    } else if (type === 'session_ended') {
+      endFailNotified = false;
+    }
+  },
+  onSessionEnded: () => refreshHomeMeasured(),
+});
+
+// 홈 "누적 측정 시간": 서버 값만 표시(기록 없음 null ↔ 0 구분). 실패하면 기존 표시 유지
+async function refreshHomeMeasured(asOf = Date.now()) {
+  try {
+    const r = await getHomeSummary(asOf);
+    store.setState({ stats: { measuredSec: typeof r?.measured_sec === 'number' ? r.measured_sec : null } });
+  } catch (err) {
+    console.warn('[neckcare] 홈 누적 측정 시간을 불러오지 못했습니다.', err.message);
+  }
+}
+
+// 통계: 조회 직전에 미전송 구간과 진행 중 구간 스냅샷(같은 asOf)을 저장한 뒤 조회한다(명세 5.5·8장).
+registerStatsProvider({
+  async query({ period, unit, asOf }) {
+    await recorder.flush(asOf);
+    const data = await getStats({ period, unit, asOf });
+    refreshHomeMeasured(asOf);
+    return data;
+  },
+});
+
+refreshHomeMeasured();
+window.addEventListener('pagehide', () => recorder.pageHide());
+
 // 초기 자세 설정: 카메라 연결 성공(connected false→true) 시 시작, 해제(true→false) 시 즉시 중단.
 // 기존 카메라 연결·해제 코드는 건드리지 않고 상태 변화만 지켜본다.
 const calibration = createCalibration({
@@ -168,10 +213,14 @@ store.subscribe((state) => {
   const connected = state.camera.connected;
   if (connected !== cameraWasConnected) {
     cameraWasConnected = connected;
-    if (connected) calibration.start();
-    else calibration.cancel();
-    // [연결 위치] D(저장) 파트 — 측정 세션 종료: connected true→false(카메라 OFF)에서 session.end() 호출 예정.
-    //   새 이벤트 받기 중단 → 마지막 구간 종료 시각 확정 → (스트림은 이미 종료됨) → 남은 기록 저장·endSession 비동기.
+    // 저장 세션: 실제 연결 성공 시각으로 시작, OFF 시 마지막 구간 최종화 후 종료(카메라는 이미 꺼진 뒤 비동기 저장)
+    if (connected) {
+      recorder.start();
+      calibration.start();
+    } else {
+      recorder.stop('camera_off');
+      calibration.cancel();
+    }
   }
   // 화면 전환: 통계로 가면 초기 설정만 잠시 멈추고(카메라 유지), 홈으로 돌아오면 다시 시작한다.
   if (state.view !== lastView) {
@@ -185,7 +234,11 @@ store.subscribe((state) => {
 // B 판정 모듈 연결: B 결과는 posture-adapter.js가 화면 상태·알림으로 바꾼다.
 // 모듈(또는 MediaPipe CDN) 로딩에 실패하면 지금처럼 판정 없이 UI만 동작한다.
 // 등록은 다음 카메라 연결부터 적용되므로 페이지를 열자마자 불러온다.
-const postureAdapter = createPostureAdapter({ store });
+const postureAdapter = createPostureAdapter({
+  store,
+  onState: recorder.setState,             // 확정 상태 → 저장 구간
+  onAlertStart: recorder.markAlertStarted, // 경고 시작 → alert_triggered
+});
 let bAnalyzer = null;
 import('./b/neckcare-analyzer.js')
   .then(({ createNeckCareAnalyzer }) => {
@@ -209,4 +262,14 @@ window.neckcare = {
   registerAnalyzer: calibration.registerAnalyzer,
   registerStatsProvider,
   getAnalyzer: () => bAnalyzer,   // 디버그용: neckcare.getAnalyzer().getDebug()
+  getRecorder: () => recorder,    // 디버그용: neckcare.getRecorder().getStatus()
 };
+
+// 테스트 모드(?mock=1)에서만: B 결과 형식의 테스트 입력을 Adapter에 넣는 통로(카메라 없이 통합 테스트용)
+if (TEST_MODE) {
+  window.neckcare.test = {
+    feed(state) {
+      postureAdapter.handleResult({ source: 'test', state, state_since: Date.now(), duration_ms: 0, timestamp: Date.now(), needs_recalibration: false });
+    },
+  };
+}

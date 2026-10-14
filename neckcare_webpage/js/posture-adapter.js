@@ -24,7 +24,10 @@ const B_HOLD_MS = 500;               // B의 안정화 시간(turtleneck.js CONF
 const KIND_OF = { TURTLE: 'turtle', WAIST: 'waist' };
 const IDLE_POSTURE = { ts: null, angle: null, status: 'unknown', kind: null, reason: null };
 
-export function createPostureAdapter({ store }) {
+// onState(state): 저장용 확정 상태 알림(B 결과 GOOD/TURTLE/WAIST/CLOSE/NOVIS, 수명주기 CALIB/IDLE)
+// onAlertStart(): 자세 경고가 비활성→활성으로 시작될 때(명세 v0.3.3의 alert_triggered)
+// 둘 다 선택이며 화면·알림 정책에는 영향을 주지 않는다(session-recorder.js가 사용).
+export function createPostureAdapter({ store, onState = () => {}, onAlertStart = () => {} }) {
   let badMs = 0;          // 지금 나쁜 자세 구간에서 이미 지난 시간(일시정지 전까지 누적)
   let runningSince = null;// 시간을 세는 중이면 performance.now() 기준 시작 시각
   let kind = null;        // 현재 나쁜 자세 종류
@@ -46,6 +49,7 @@ export function createPostureAdapter({ store }) {
   function fireAlert() {
     timer = null;
     alerting = true;
+    onAlertStart();
     startPostureAlert(loadNotifyLevel(), { kind });
     setPosture({ ts: Date.now(), status: 'bad', kind });
   }
@@ -79,7 +83,9 @@ export function createPostureAdapter({ store }) {
   }
 
   function handleResult(r) {
-    if (!r || recalibration) return;
+    if (!r) return;
+    onState(r.state);   // 저장용: B 확정 상태 그대로(화면 처리와 별개)
+    if (recalibration) return;
 
     if (r.needs_recalibration) {
       recalibration = true;
@@ -134,6 +140,7 @@ export function createPostureAdapter({ store }) {
     return {
       async beginBaseline(video) {
         reset();
+        onState('CALIB');   // 초기 자세 설정 구간(유효 측정시간 제외)
         return analyzer.beginBaseline(video);
       },
       finishBaseline: () => analyzer.finishBaseline(),
@@ -144,6 +151,7 @@ export function createPostureAdapter({ store }) {
       stop() {
         analyzer.stop();
         reset();
+        onState('IDLE');    // 판정 중지(기준 자세 실패·설정 취소). 카메라 OFF 때는 저장 세션이 먼저 끝나 무시됨
       },
     };
   }
