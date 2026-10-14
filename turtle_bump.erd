@@ -1,0 +1,354 @@
+{
+  "$schema": "https://raw.githubusercontent.com/dineug/erd-editor/main/json-schema/schema.json",
+  "version": "3.0.0",
+  "settings": {
+    "originX": 0,
+    "originY": 0,
+    "zoomLevel": 1,
+    "show": 431,
+    "database": 1,
+    "databaseName": "turtle_bump",
+    "canvasType": "ERD",
+    "language": 16,
+    "tableNameCase": 8,
+    "columnNameCase": 8,
+    "bracketType": 1,
+    "relationshipDataTypeSync": true,
+    "columnOrder": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      32,
+      64
+    ],
+    "maxWidthComment": -1,
+    "lockSettings": 63
+  },
+  "doc": {
+    "tableIds": [
+      "t_sessions",
+      "t_posture_events",
+      "t_posture_states"
+    ],
+    "relationshipIds": [
+      "r_s_e",
+      "r_st_e"
+    ],
+    "indexIds": [
+      "i_e_sid"
+    ],
+    "memoIds": [
+      "m_1",
+      "m_2",
+      "m_3",
+      "m_4"
+    ]
+  },
+  "collections": {
+    "tableEntities": {
+      "t_posture_events": {
+        "id": "t_posture_events",
+        "name": "posture_events",
+        "comment": "자세 상태 기록 (시간 포함)",
+        "columnIds": [
+          "c_e_id",
+          "c_e_sid",
+          "c_e_state",
+          "c_e_start",
+          "c_e_end",
+          "c_e_dur",
+          "c_e_alert"
+        ],
+        "ui": {
+          "x": 546.5385,
+          "y": 86.5385,
+          "color": ""
+        }
+      },
+      "t_posture_states": {
+        "id": "t_posture_states",
+        "name": "posture_states",
+        "comment": "자세 상태 범주 (시간 없음)",
+        "columnIds": [
+          "c_st_state",
+          "c_st_label",
+          "c_st_counted",
+          "c_st_alert"
+        ],
+        "ui": {
+          "x": 596.5385,
+          "y": 366.9231,
+          "color": ""
+        }
+      },
+      "t_sessions": {
+        "id": "t_sessions",
+        "name": "sessions",
+        "comment": "측정 세션",
+        "columnIds": [
+          "c_s_id",
+          "c_s_start",
+          "c_s_end",
+          "c_s_total",
+          "c_s_valid"
+        ],
+        "ui": {
+          "x": -232.6923,
+          "y": 107.3077,
+          "color": ""
+        }
+      }
+    },
+    "tableColumnEntities": {
+      "c_e_alert": {
+        "id": "c_e_alert",
+        "tableId": "t_posture_events",
+        "name": "alert_triggered",
+        "comment": "알림 발생 여부",
+        "dataType": "BOOLEAN",
+        "default": "0",
+        "options": 8
+      },
+      "c_e_dur": {
+        "id": "c_e_dur",
+        "tableId": "t_posture_events",
+        "name": "duration_sec",
+        "comment": "상태 유지 시간(초)",
+        "dataType": "FLOAT",
+        "default": "0",
+        "options": 8
+      },
+      "c_e_end": {
+        "id": "c_e_end",
+        "tableId": "t_posture_events",
+        "name": "ended_at",
+        "comment": "상태 종료",
+        "dataType": "DATETIME(3)",
+        "default": "",
+        "options": 0
+      },
+      "c_e_id": {
+        "id": "c_e_id",
+        "tableId": "t_posture_events",
+        "name": "event_id",
+        "comment": "이벤트 UUID (프런트 생성, 재전송 중복 방지)",
+        "dataType": "CHAR(36)",
+        "default": "",
+        "options": 10
+      },
+      "c_e_sid": {
+        "id": "c_e_sid",
+        "tableId": "t_posture_events",
+        "name": "session_id",
+        "comment": "소속 세션 (FK)",
+        "dataType": "INT",
+        "default": "",
+        "options": 8
+      },
+      "c_e_start": {
+        "id": "c_e_start",
+        "tableId": "t_posture_events",
+        "name": "started_at",
+        "comment": "상태 시작",
+        "dataType": "DATETIME(3)",
+        "default": "",
+        "options": 8
+      },
+      "c_e_state": {
+        "id": "c_e_state",
+        "tableId": "t_posture_events",
+        "name": "state",
+        "comment": "자세 상태 (FK → posture_states)",
+        "dataType": "VARCHAR(32)",
+        "default": "",
+        "options": 8
+      },
+      "c_st_alert": {
+        "id": "c_st_alert",
+        "tableId": "t_posture_states",
+        "name": "is_alert",
+        "comment": "경고 대상 상태 여부",
+        "dataType": "BOOLEAN",
+        "default": "0",
+        "options": 8
+      },
+      "c_st_counted": {
+        "id": "c_st_counted",
+        "tableId": "t_posture_states",
+        "name": "is_counted",
+        "comment": "집계 대상 여부 (NOVIS, CALIB, IDLE = 0)",
+        "dataType": "BOOLEAN",
+        "default": "1",
+        "options": 8
+      },
+      "c_st_label": {
+        "id": "c_st_label",
+        "tableId": "t_posture_states",
+        "name": "label",
+        "comment": "화면 표시용 이름",
+        "dataType": "VARCHAR(32)",
+        "default": "",
+        "options": 8
+      },
+      "c_st_state": {
+        "id": "c_st_state",
+        "tableId": "t_posture_states",
+        "name": "state",
+        "comment": "상태 코드 (GOOD, TURTLE, WAIST, CLOSE, NOVIS, CALIB, IDLE)",
+        "dataType": "VARCHAR(32)",
+        "default": "",
+        "options": 10
+      },
+      "c_s_end": {
+        "id": "c_s_end",
+        "tableId": "t_sessions",
+        "name": "ended_at",
+        "comment": "측정 종료 시각 (NULL = 진행 중/비정상 종료)",
+        "dataType": "DATETIME(3)",
+        "default": "",
+        "options": 0
+      },
+      "c_s_id": {
+        "id": "c_s_id",
+        "tableId": "t_sessions",
+        "name": "session_id",
+        "comment": "세션 고유 ID",
+        "dataType": "INT",
+        "default": "",
+        "options": 11
+      },
+      "c_s_start": {
+        "id": "c_s_start",
+        "tableId": "t_sessions",
+        "name": "started_at",
+        "comment": "측정 시작 시각",
+        "dataType": "DATETIME(3)",
+        "default": "",
+        "options": 8
+      },
+      "c_s_total": {
+        "id": "c_s_total",
+        "tableId": "t_sessions",
+        "name": "total_duration_sec",
+        "comment": "세션 전체 경과 시간(초). 종료 시 서버가 계산해서 저장",
+        "dataType": "INT",
+        "default": "0",
+        "options": 8
+      },
+      "c_s_valid": {
+        "id": "c_s_valid",
+        "tableId": "t_sessions",
+        "name": "valid_duration_sec",
+        "comment": "유효 분석 시간(초). is_counted=0 상태 제외",
+        "dataType": "INT",
+        "default": "0",
+        "options": 8
+      }
+    },
+    "relationshipEntities": {
+      "r_s_e": {
+        "id": "r_s_e",
+        "relationshipType": 16,
+        "onDelete": 4,
+        "onUpdate": 1,
+        "start": {
+          "tableId": "t_sessions",
+          "columnIds": [
+            "c_s_id"
+          ]
+        },
+        "end": {
+          "tableId": "t_posture_events",
+          "columnIds": [
+            "c_e_sid"
+          ]
+        }
+      },
+      "r_st_e": {
+        "id": "r_st_e",
+        "relationshipType": 16,
+        "onDelete": 32,
+        "onUpdate": 4,
+        "start": {
+          "tableId": "t_posture_states",
+          "columnIds": [
+            "c_st_state"
+          ]
+        },
+        "end": {
+          "tableId": "t_posture_events",
+          "columnIds": [
+            "c_e_state"
+          ]
+        }
+      }
+    },
+    "indexEntities": {
+      "i_e_sid": {
+        "id": "i_e_sid",
+        "name": "idx_events_session",
+        "tableId": "t_posture_events",
+        "indexColumnIds": [
+          "ic_1"
+        ],
+        "unique": false
+      }
+    },
+    "indexColumnEntities": {
+      "ic_1": {
+        "id": "ic_1",
+        "indexId": "i_e_sid",
+        "columnId": "c_e_sid",
+        "orderType": 1
+      }
+    },
+    "memoEntities": {
+      "m_1": {
+        "id": "m_1",
+        "value": "posture_states 초기 데이터(시드) 먼저 INSERT 필요\n집계 제외: is_counted = 0 (NOVIS, CALIB, IDLE)\n거북목 횟수 = state='TURTLE' 이벤트 COUNT",
+        "ui": {
+          "x": 503.4211,
+          "y": 538.4211,
+          "width": 380,
+          "height": 110,
+          "color": ""
+        }
+      },
+      "m_2": {
+        "id": "m_2",
+        "value": "[알림 컬럼 구분]\nposture_states.is_alert: 이 상태가 경고 대상인가 (고정값)\nposture_events.alert_triggered: 이 이벤트에서 알림이 실제로 떴는가\n알림은 이벤트당 최대 1번",
+        "ui": {
+          "x": 906.0526,
+          "y": 540.7895,
+          "width": 380,
+          "height": 110,
+          "color": ""
+        }
+      },
+      "m_3": {
+        "id": "m_3",
+        "value": "[시간 규칙]\n모든 시각은 UTC, DATETIME(3)로 저장\nended_at이 NULL이면 진행 중이거나 비정상 종료",
+        "ui": {
+          "x": 100,
+          "y": 400,
+          "width": 380,
+          "height": 110,
+          "color": ""
+        }
+      },
+      "m_4": {
+        "id": "m_4",
+        "value": "[집계 컬럼]\ntotal_duration_sec: 세션 종료 시 서버가 계산해서 저장\nvalid_duration_sec: is_counted = 1 인 이벤트의 duration_sec 합",
+        "ui": {
+          "x": 100,
+          "y": 540,
+          "width": 380,
+          "height": 110,
+          "color": ""
+        }
+      }
+    }
+  }
+}

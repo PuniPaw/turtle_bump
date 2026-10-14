@@ -1,175 +1,169 @@
-// ============================================================
+
 // storage.js
-// D 담당: Flask API 통신
-//
-// 1. 측정 세션 시작
-// 2. 자세 판정 데이터 전송
-// 3. 측정 종료
-// 4. 세션 목록 및 기록 조회
-// 5. 통계 조회
-// ============================================================
+// D 담당: Flask 서버와 통신하는 공통 API 모듈
 
+// C의 정적 서버(5173)와 D의 Flask 서버(5000)를 분리
+export const API_BASE = "http://127.0.0.1:5000";
 
-// Flask 서버의 기본 API 주소
-const API = "/api/sessions";
+// --------------------------------------------------
+// 1. 공통 요청 함수
+// --------------------------------------------------
 
+async function requestJSON(path, options = {}) {
+    const response = await fetch(API_BASE + path, {
+        ...options,
+        headers: {
+            "Content-Type": "application/json",
+            ...(options.headers || {})
+        }
+    });
 
-// ------------------------------------------------------------
-// 1. 공통 API 요청 함수
-// ------------------------------------------------------------
-
-async function requestJSON(url, options = {}) {
-
-    // Flask 서버에 HTTP 요청
-    const response = await fetch(url, options);
-
-    // 서버가 반환한 응답 읽기
     const raw = await response.text();
-
-    let data = null;
+    let data;
 
     try {
-
-        // JSON 응답을 JavaScript 객체로 변환
         data = raw ? JSON.parse(raw) : null;
-
     } catch {
-
         throw new Error(
-            `서버 응답이 JSON 형식이 아닙니다. (${response.status})`
+            `서버 응답이 JSON이 아닙니다. HTTP ${response.status}`
         );
     }
 
-    // 400, 404, 500 등 오류 응답 처리
     if (!response.ok) {
+        const message =
+            data?.error?.message ||
+            `서버 요청 실패: HTTP ${response.status}`;
 
-        throw new Error(
-            data?.error ||
-            `서버 요청 실패 (${response.status})`
-        );
+        const error = new Error(message);
+        error.status = response.status;
+        throw error;
     }
 
     return data;
 }
 
 
-// ------------------------------------------------------------
-// 2. 측정 세션 시작
-// ------------------------------------------------------------
+// --------------------------------------------------
+// 2. 측정 세션 생성
+// --------------------------------------------------
 
-export async function startSession() {
-
-    // Flask 서버에 새 세션 생성 요청
-    const result = await requestJSON(API, {
-        method: "POST"
+export async function startSession(startedAtMs = Date.now()) {
+    const result = await requestJSON("/api/sessions", {
+        method: "POST",
+        body: JSON.stringify({
+            started_at_ms: startedAtMs
+        })
     });
 
-    // 서버가 발급한 세션 ID 반환
-    return result.sessionId;
+    // ERD의 session_id는 INT
+    return result.session_id;
 }
 
 
-// ------------------------------------------------------------
-// 3. 측정 데이터 저장
-// ------------------------------------------------------------
+// --------------------------------------------------
+// 3. 자세 구간 저장
+// --------------------------------------------------
 
 export async function saveEvents(sessionId, events) {
-
-    // events는 측정 결과 배열
-    //
-    // 예시:
-    // [
-    //   {
-    //     ts: Date.now(),
-    //     status: "TURTLE",
-    //     fwd: 4.2,
-    //     appr: 1.5,
-    //     drop: 0.8,
-    //     dist: 2.1,
-    //     yaw: 3.0
-    //   }
-    // ]
+    if (!Number.isInteger(sessionId)) {
+        throw new Error("유효한 sessionId가 필요합니다.");
+    }
 
     if (!Array.isArray(events)) {
-
-        throw new Error(
-            "측정 데이터는 배열이어야 합니다."
-        );
+        throw new Error("events는 배열이어야 합니다.");
     }
 
-    if (!sessionId) {
-
-        throw new Error(
-            "세션 ID가 없습니다."
-        );
-    }
-
-    // 측정 결과를 JSON으로 변환해 Flask로 전송
-    return requestJSON(
-        `${API}/${encodeURIComponent(sessionId)}/events`,
+    return await requestJSON(
+        `/api/sessions/${sessionId}/events`,
         {
             method: "POST",
+            body: JSON.stringify({ events })
+        }
+    );
+}
 
-            headers: {
-                "Content-Type": "application/json"
-            },
 
+// --------------------------------------------------
+// 4. 측정 세션 종료
+// --------------------------------------------------
+
+export async function endSession(
+    sessionId,
+    reason = "camera_off",
+    endedAtMs = Date.now()
+) {
+    return await requestJSON(
+        `/api/sessions/${sessionId}/end`,
+        {
+            method: "POST",
             body: JSON.stringify({
-                events
+                ended_at_ms: endedAtMs,
+                reason
             })
         }
     );
 }
 
 
-// ------------------------------------------------------------
-// 4. 측정 세션 종료
-// ------------------------------------------------------------
+// --------------------------------------------------
+// 5. 홈 누적 측정 시간 조회
+// --------------------------------------------------
 
-export async function endSession(sessionId) {
-
-    // 종료 시각을 Flask DB에 기록
-    return requestJSON(
-        `${API}/${encodeURIComponent(sessionId)}/end`,
-        {
-            method: "POST"
-        }
+export async function getHomeSummary(
+    asOfMs = Date.now()
+) {
+    return await requestJSON(
+        `/api/summary/home?as_of_ms=${asOfMs}`
     );
 }
 
 
-// ------------------------------------------------------------
-// 5. 전체 측정 세션 목록
-// ------------------------------------------------------------
+// --------------------------------------------------
+// 6. 오늘 / 7일 / 30일 통계 조회
+// --------------------------------------------------
 
-export async function listSessions() {
+export async function getStats({
+    period = "today",
+    unit = "day",
+    asOf = Date.now()
+} = {}) {
+    const params = new URLSearchParams({
+        period,
+        unit,
+        as_of_ms: String(asOf)
+    });
 
-    // 저장된 전체 세션 목록 반환
-    return requestJSON(API);
-}
-
-
-// ------------------------------------------------------------
-// 6. 특정 세션 조회
-// ------------------------------------------------------------
-
-export async function getSession(sessionId) {
-
-    // 해당 세션의 측정 시각, 상태, 수치 데이터 조회
-    return requestJSON(
-        `${API}/${encodeURIComponent(sessionId)}`
+    return await requestJSON(
+        `/api/stats?${params.toString()}`
     );
 }
 
 
-// ------------------------------------------------------------
-// 7. 서버 통계 조회
-// ------------------------------------------------------------
+// --------------------------------------------------
+// 7. 페이지 종료 시 세션 종료 요청
+// --------------------------------------------------
 
-export async function getStats(sessionId) {
+export function sendEndBeacon(
+    sessionId,
+    reason = "pagehide"
+) {
+    if (!Number.isInteger(sessionId)) {
+        return false;
+    }
 
-    // 거북목 / 허리 굽힘 등의 판정 비율 조회
-    return requestJSON(
-        `${API}/${encodeURIComponent(sessionId)}/stats`
-    );
+    const url =
+        `${API_BASE}/api/sessions/${sessionId}/end`;
+
+    const body = JSON.stringify({
+        ended_at_ms: Date.now(),
+        reason
+    });
+
+    // sendBeacon은 응답 내용을 읽을 수 없다.
+    // true는 전송 예약 성공이지 DB 저장 성공이 아니다.
+    const blob = new Blob([body], {
+        type: "application/json"
+    });
+
+    return navigator.sendBeacon(url, blob);
 }
