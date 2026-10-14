@@ -1,4 +1,19 @@
 
+"""
+app.py
+NeckCare API v0.3.2
+
+D 담당
+- Flask API
+- MariaDB 저장
+- 이벤트 중복 검증
+- 기간별 통계 계산
+
+실행:
+    pip install flask mysqlclient python-dotenv
+    python app.py
+"""
+
 import os
 import time
 import uuid
@@ -8,17 +23,24 @@ from zoneinfo import ZoneInfo
 
 import MySQLdb
 import MySQLdb.cursors
+
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 
-load_dotenv(Path(__file__).resolve().parent / ".env")
+
+# ==========================================
+# 1. 기본 환경 설정
+# ==========================================
+
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 
 app = Flask(__name__)
 
 KST = ZoneInfo("Asia/Seoul")
 UTC = timezone.utc
 
-ORIGINS = {
+ALLOWED_ORIGINS = {
     "http://localhost:5173",
     "http://127.0.0.1:5173"
 }
@@ -33,20 +55,41 @@ STATES = [
     ("IDLE", "대기", 0, 0)
 ]
 
-VALID_STATES = {x[0] for x in STATES}
-COUNTED = {"GOOD", "TURTLE", "WAIST", "CLOSE"}
+VALID_STATES = {row[0] for row in STATES}
+
+COUNTED_STATES = {
+    "GOOD", "TURTLE", "WAIST", "CLOSE"
+}
+
+BAD_STATES = {"TURTLE", "WAIST"}
+
+TYPE_MAP = {
+    "GOOD": "good",
+    "TURTLE": "turtle",
+    "WAIST": "shrimp",
+    "CLOSE": "other"
+}
 
 
-# -------------------------------------------
-# 1. MariaDB 연결 및 초기화
-# -------------------------------------------
+# ==========================================
+# 2. DB 연결
+# ==========================================
 
 def get_db():
+    """MariaDB 연결 후 시간대를 UTC로 고정한다."""
+
+    password = os.getenv("DB_PASSWORD")
+
+    if not password:
+        raise RuntimeError(
+            ".env 파일의 DB_PASSWORD를 확인하세요."
+        )
+
     db = MySQLdb.connect(
         host=os.getenv("DB_HOST", "127.0.0.1"),
         port=int(os.getenv("DB_PORT", "3306")),
         user=os.getenv("DB_USER", "root"),
-        passwd=os.getenv("DB_PASSWORD", ""),
+        passwd=password,
         db=os.getenv("DB_NAME", "turtle_bump"),
         charset="utf8mb4",
         cursorclass=MySQLdb.cursors.DictCursor,
@@ -60,10 +103,20 @@ def get_db():
 
 
 def init_db():
+    """
+    없는 테이블만 생성한다.
+    기존 테이블 및 데이터는 삭제하지 않는다.
+
+    주의:
+    CREATE TABLE IF NOT EXISTS는
+    기존 테이블의 컬럼 구조를 변경하지 않는다.
+    """
+
     db = get_db()
 
     try:
         with db.cursor() as cur:
+
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS sessions (
                     session_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -71,7 +124,8 @@ def init_db():
                     ended_at DATETIME(3) NULL,
                     total_duration_sec INT NOT NULL DEFAULT 0,
                     valid_duration_sec INT NOT NULL DEFAULT 0
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                ) ENGINE=InnoDB
+                DEFAULT CHARSET=utf8mb4
             """)
 
             cur.execute("""
@@ -80,7 +134,8 @@ def init_db():
                     label VARCHAR(32) NOT NULL,
                     is_counted BOOLEAN NOT NULL,
                     is_alert BOOLEAN NOT NULL
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                ) ENGINE=InnoDB
+                DEFAULT CHARSET=utf8mb4
             """)
 
             cur.execute("""
@@ -92,22 +147,23 @@ def init_db():
                     ended_at DATETIME(3) NULL,
                     duration_sec FLOAT NOT NULL DEFAULT 0,
                     alert_triggered BOOLEAN NOT NULL DEFAULT 0,
+
                     INDEX idx_events_session (session_id),
+
                     FOREIGN KEY (session_id)
                         REFERENCES sessions(session_id),
+
                     FOREIGN KEY (state)
                         REFERENCES posture_states(state)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                ) ENGINE=InnoDB
+                DEFAULT CHARSET=utf8mb4
             """)
 
+            # 이미 존재하는 자세 코드는 변경하지 않음
             cur.executemany("""
-                INSERT INTO posture_states
+                INSERT IGNORE INTO posture_states
                 (state, label, is_counted, is_alert)
                 VALUES (%s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE
-                    label=VALUES(label),
-                    is_counted=VALUES(is_counted),
-                    is_alert=VALUES(is_alert)
             """, STATES)
 
         db.commit()
@@ -120,209 +176,299 @@ def init_db():
         db.close()
 
 
-# -------------------------------------------
-# 2. 공통 시간 및 오류 처리
-# -------------------------------------------
+# ==========================================
+# 3. 시간 변환
+# ==========================================
 
 def now_ms():
+    """현재 Unix 밀리초."""
     return int(time.time() * 1000)
 
 
-def parse_ms(value, name):
+def parse_ms(value, field):
+    """밀리초 값의 형식을 검사한다."""
+
     if (
         type(value) is not int
         or value < 0
         or value > 32503680000000
     ):
         raise ValueError(
-            f"{name}은 epoch 밀리초 정수여야 합니다."
+            f"{field}은 유효한 밀리초 정수여야 합니다."
         )
 
     return value
 
 
 def utc_dt(ms):
+    """epoch ms -> MariaDB UTC DATETIME."""
+
     return datetime.fromtimestamp(
         ms / 1000, UTC
     ).replace(tzinfo=None)
 
 
 def epoch_ms(dt):
+    """MariaDB UTC DATETIME -> epoch ms."""
+
     return int(
         dt.replace(tzinfo=UTC).timestamp() * 1000
     )
+
+
+def to_kst(ms):
+    """epoch ms -> 한국 시간."""
+
+    return datetime.fromtimestamp(ms / 1000, KST)
+
+
+# ==========================================
+# 4. 공통 요청 및 오류 처리
+# ==========================================
+
+class ApiError(Exception):
+    def __init__(self, reason, message, status=400):
+        self.reason = reason
+        self.message = message
+        self.status = status
+        super().__init__(message)
+
+
+def invalid(message):
+    raise ApiError("INVALID_REQUEST", message, 400)
+
+
+def conflict(reason, message):
+    raise ApiError(reason, message, 409)
 
 
 def body_json():
     data = request.get_json(silent=True)
 
     if not isinstance(data, dict):
-        raise ValueError("JSON 객체가 필요합니다.")
+        invalid("JSON 객체를 보내야 합니다.")
 
     return data
 
 
-class APIError(Exception):
-    def __init__(self, status, reason, message):
-        super().__init__(message)
-        self.status = status
-        self.reason = reason
-
-
-@app.errorhandler(APIError)
-def handle_api_error(error):
+def error_response(error):
     return jsonify({
         "ok": False,
         "error": {
             "code": error.status,
-            "reason": error.reason,
-            "message": str(error)
+            "message": error.message,
+            "reason": error.reason
         }
     }), error.status
 
 
-@app.errorhandler(ValueError)
-def handle_value_error(error):
+@app.errorhandler(ApiError)
+def handle_api_error(error):
+    return error_response(error)
+
+
+@app.errorhandler(500)
+def handle_internal_error(error):
+    # 내부 SQL 오류 등을 사용자에게 노출하지 않음
+    app.logger.exception("서버 내부 오류")
+
     return jsonify({
         "ok": False,
         "error": {
-            "code": 400,
-            "reason": "INVALID_REQUEST",
-            "message": str(error)
+            "code": 500,
+            "message": "서버 내부 오류가 발생했습니다.",
+            "reason": "INTERNAL_ERROR"
         }
-    }), 400
+    }), 500
 
 
+# C 프론트엔드에서 Flask를 호출할 수 있도록 설정
 @app.after_request
-def add_cors(response):
+def cors(response):
     origin = request.headers.get("Origin")
 
-    if origin in ORIGINS:
+    if origin in ALLOWED_ORIGINS:
         response.headers[
             "Access-Control-Allow-Origin"
         ] = origin
 
         response.headers["Vary"] = "Origin"
+        response.headers[
+            "Access-Control-Allow-Methods"
+        ] = "GET,POST,OPTIONS"
 
         response.headers[
             "Access-Control-Allow-Headers"
         ] = "Content-Type"
 
-        response.headers[
-            "Access-Control-Allow-Methods"
-        ] = "GET,POST,OPTIONS"
-
     return response
 
 
 @app.before_request
-def handle_preflight():
+def preflight():
     if request.method == "OPTIONS":
         return "", 204
 
 
-# -------------------------------------------
-# 3. 이벤트 입력 검증
-# -------------------------------------------
+# ==========================================
+# 5. API 1: 세션 생성
+# ==========================================
 
-def prepare_events(raw):
-    if not isinstance(raw, list) or len(raw) > 500:
-        raise ValueError(
-            "events는 최대 500개 배열이어야 합니다."
-        )
+@app.post("/api/sessions")
+def create_session():
 
-    events = []
+    data = body_json()
 
-    for item in raw:
-        if not isinstance(item, dict):
-            raise ValueError("이벤트는 객체여야 합니다.")
+    started = parse_ms(
+        data.get("started_at_ms", now_ms()),
+        "started_at_ms"
+    )
+
+    if started > now_ms() + 60000:
+        invalid("시작 시각이 너무 미래입니다.")
+
+    db = get_db()
+
+    try:
+        with db.cursor() as cur:
+            cur.execute("""
+                INSERT INTO sessions (started_at)
+                VALUES (%s)
+            """, (utc_dt(started),))
+
+            session_id = cur.lastrowid
+
+        db.commit()
+
+    except Exception:
+        db.rollback()
+        raise
+
+    finally:
+        db.close()
+
+    return jsonify({
+        "session_id": session_id,
+        "started_at_ms": started
+    }), 201
+
+
+# ==========================================
+# 6. 이벤트 데이터 검증
+# ==========================================
+
+def prepare_events(raw_events):
+    """프론트에서 받은 이벤트를 검증한다."""
+
+    if (
+        not isinstance(raw_events, list)
+        or len(raw_events) > 500
+    ):
+        invalid("events는 최대 500개 배열이어야 합니다.")
+
+    prepared = []
+
+    for event in raw_events:
+
+        if not isinstance(event, dict):
+            invalid("각 이벤트는 JSON 객체여야 합니다.")
 
         try:
-            event_id = str(uuid.UUID(item["event_id"]))
-            state = item["state"]
-            start = parse_ms(
-                item["started_at_ms"],
+            event_id = str(uuid.UUID(event["event_id"]))
+            state = event["state"]
+
+            started = parse_ms(
+                event["started_at_ms"],
                 "started_at_ms"
             )
-        except (KeyError, TypeError, AttributeError) as exc:
-            raise ValueError(
-                "필수 이벤트 필드가 올바르지 않습니다."
-            ) from exc
 
-        if state not in VALID_STATES:
-            raise ValueError("허용되지 않은 자세 상태입니다.")
+        except (KeyError, ValueError, TypeError, AttributeError):
+            invalid("이벤트 필수 항목이 올바르지 않습니다.")
 
-        raw_end = item.get("ended_at_ms")
+        if not isinstance(state, str) or state not in VALID_STATES:
+            invalid("허용되지 않은 자세 상태입니다.")
 
-        end = (
+        raw_end = event.get("ended_at_ms")
+
+        ended = (
             None if raw_end is None
             else parse_ms(raw_end, "ended_at_ms")
         )
 
-        if end is not None and end < start:
-            raise ValueError(
-                "종료 시각이 시작 시각보다 빠릅니다."
-            )
+        if ended is not None and ended < started:
+            invalid("이벤트 종료가 시작보다 빠릅니다.")
 
-        alert = item.get("alert_triggered", False)
+        alert = event.get("alert_triggered")
 
         if type(alert) is not bool:
-            raise ValueError(
-                "alert_triggered는 boolean이어야 합니다."
-            )
+            invalid("alert_triggered는 Boolean이어야 합니다.")
 
-        events.append({
+        prepared.append({
             "id": event_id,
             "state": state,
-            "start": start,
-            "end": end,
+            "start": started,
+            "end": ended,
             "alert": int(alert)
         })
 
-    return events
+    return prepared
 
 
-# -------------------------------------------
-# 4. 이벤트 구간 겹침 검사
-# -------------------------------------------
+# ==========================================
+# 7. 이벤트 시간 중복 검증
+# ==========================================
 
 def validate_overlaps(cur, session_id):
+    """
+    동일 세션의 서로 다른 이벤트가
+    같은 시간에 겹치는지 확인한다.
+
+    NULL은 아직 끝이 확정되지 않은 상태다.
+    확정된 구간과 다음 시작 시각을 비교한다.
+    """
+
     cur.execute("""
         SELECT event_id, started_at, ended_at
         FROM posture_events
-        WHERE session_id=%s
+        WHERE session_id = %s
         ORDER BY started_at, event_id
     """, (session_id,))
 
     rows = cur.fetchall()
 
+    previous_start = None
     previous_end = None
 
     for row in rows:
         start = epoch_ms(row["started_at"])
+
         end = (
             epoch_ms(row["ended_at"])
             if row["ended_at"] is not None
             else None
         )
 
-        if previous_end is not None:
-            if start < previous_end:
-                raise APIError(
-                    409,
-                    "EVENT_OVERLAP",
-                    "자세 이벤트 시간이 서로 겹칩니다."
-                )
+        # 서로 다른 이벤트의 시작 시각이 같으면 충돌
+        if previous_start is not None and start == previous_start:
+            conflict(
+                "EVENT_OVERLAP",
+                "서로 다른 이벤트의 시작 시각이 같습니다."
+            )
 
-        # 열린 이벤트는 아직 관측된 시간이 없으므로
-        # 이후 구간의 겹침은 종료 시 다시 검증한다.
-        if end is not None:
-            previous_end = end
+        # 이전 확정 구간이 현재 시작 시각과 겹치는 경우
+        if previous_end is not None and start < previous_end:
+            conflict(
+                "EVENT_OVERLAP",
+                "자세 이벤트 시간이 겹칩니다."
+            )
+
+        previous_start = start
+        previous_end = end
 
 
-# -------------------------------------------
-# 5. UUID 기준 INSERT / UPDATE
-# -------------------------------------------
+# ==========================================
+# 8. UUID 기준 INSERT / UPDATE
+# ==========================================
 
 def upsert_events(
     cur,
@@ -331,45 +477,53 @@ def upsert_events(
     session_end,
     events
 ):
+    """
+    동일 UUID는 새 행을 만들지 않는다.
+
+    - 종료 시각은 더 늦은 값 유지
+    - 경고 true는 유지
+    - 다른 state/start/session이면 409
+    """
+
     saved = 0
     updated = 0
     ignored = 0
 
     for event in events:
+
         start = event["start"]
         end = event["end"]
 
-        if (
-            start < session_start
-            or (
-                session_end is not None
-                and (
-                    start > session_end
-                    or (
-                        end is not None
-                        and end > session_end
-                    )
-                )
-            )
-        ):
-            raise APIError(
-                409,
+        if start < session_start:
+            conflict(
                 "EVENT_OUT_OF_RANGE",
-                "이벤트가 세션 범위를 벗어났습니다."
+                "이벤트가 세션 시작보다 빠릅니다."
             )
+
+        if session_end is not None:
+            if (
+                start > session_end
+                or (end is not None and end > session_end)
+            ):
+                conflict(
+                    "EVENT_OUT_OF_RANGE",
+                    "이벤트가 세션 종료 이후입니다."
+                )
 
         cur.execute("""
             SELECT *
             FROM posture_events
-            WHERE event_id=%s
+            WHERE event_id = %s
             FOR UPDATE
         """, (event["id"],))
 
         old = cur.fetchone()
 
         if old is None:
+            # 새로운 UUID: INSERT
             cur.execute("""
-                INSERT INTO posture_events (
+                INSERT INTO posture_events
+                (
                     event_id,
                     session_id,
                     state,
@@ -391,114 +545,74 @@ def upsert_events(
             ))
 
             saved += 1
-            continue
 
-        if (
-            old["session_id"] != session_id
-            or old["state"] != event["state"]
-            or epoch_ms(old["started_at"]) != start
-        ):
-            raise APIError(
-                409,
-                "EVENT_ID_CONFLICT",
-                "UUID가 다른 자세 구간에 사용됐습니다."
+        else:
+            # 기존 UUID의 고정 정보 확인
+            if (
+                old["session_id"] != session_id
+                or old["state"] != event["state"]
+                or epoch_ms(old["started_at"]) != start
+            ):
+                conflict(
+                    "EVENT_ID_CONFLICT",
+                    "동일 UUID가 다른 자세 구간에 사용됐습니다."
+                )
+
+            old_end = (
+                epoch_ms(old["ended_at"])
+                if old["ended_at"] is not None
+                else None
             )
 
-        old_end = (
-            epoch_ms(old["ended_at"])
-            if old["ended_at"] is not None
-            else None
-        )
+            # NULL 재전송으로 기존 종료 시각을 지우지 않음
+            if old_end is None:
+                new_end = end
+            elif end is None:
+                new_end = old_end
+            else:
+                new_end = max(old_end, end)
 
-        if old_end is None:
-            new_end = end
-        elif end is None:
-            new_end = old_end
-        else:
-            new_end = max(old_end, end)
+            # 실제 경고 발생 이력은 OR 처리
+            new_alert = int(
+                bool(old["alert_triggered"] or event["alert"])
+            )
 
-        new_alert = int(
-            bool(old["alert_triggered"] or event["alert"])
-        )
+            if (
+                new_end != old_end
+                or new_alert != int(old["alert_triggered"])
+            ):
+                cur.execute("""
+                    UPDATE posture_events
+                    SET
+                        ended_at = %s,
+                        duration_sec = %s,
+                        alert_triggered = %s
+                    WHERE event_id = %s
+                """, (
+                    utc_dt(new_end)
+                        if new_end is not None else None,
+                    round((new_end - start) / 1000, 3)
+                        if new_end is not None else 0,
+                    new_alert,
+                    event["id"]
+                ))
 
-        if (
-            new_end == old_end
-            and new_alert == int(old["alert_triggered"])
-        ):
-            ignored += 1
-            continue
-
-        cur.execute("""
-            UPDATE posture_events
-            SET
-                ended_at=%s,
-                duration_sec=%s,
-                alert_triggered=%s
-            WHERE event_id=%s
-        """, (
-            utc_dt(new_end)
-                if new_end is not None else None,
-            round((new_end - start) / 1000, 3)
-                if new_end is not None else 0,
-            new_alert,
-            event["id"]
-        ))
-
-        updated += 1
+                updated += 1
+            else:
+                ignored += 1
 
     validate_overlaps(cur, session_id)
 
     return saved, updated, ignored
 
 
-# -------------------------------------------
-# 6. API 1 : 세션 생성
-# -------------------------------------------
-
-@app.post("/api/sessions")
-def create_session():
-    data = body_json()
-
-    started = parse_ms(
-        data.get("started_at_ms", now_ms()),
-        "started_at_ms"
-    )
-
-    if started > now_ms() + 60000:
-        raise ValueError("시작 시각이 미래입니다.")
-
-    db = get_db()
-
-    try:
-        with db.cursor() as cur:
-            cur.execute("""
-                INSERT INTO sessions (started_at)
-                VALUES (%s)
-            """, (utc_dt(started),))
-
-            session_id = cur.lastrowid
-
-        db.commit()
-
-        return jsonify({
-            "session_id": session_id,
-            "started_at_ms": started
-        }), 201
-
-    except Exception:
-        db.rollback()
-        raise
-
-    finally:
-        db.close()
-
-
-# -------------------------------------------
-# 7. API 2 : 자세 이벤트 저장
-# -------------------------------------------
+# ==========================================
+# 9. API 2: 이벤트 저장
+# ==========================================
 
 @app.post("/api/sessions/<int:session_id>/events")
-def save_posture_events(session_id):
+def save_events_api(session_id):
+
     data = body_json()
     events = prepare_events(data.get("events"))
 
@@ -506,26 +620,26 @@ def save_posture_events(session_id):
 
     try:
         with db.cursor() as cur:
-            # 같은 세션에 대한 동시 요청 잠금
+
+            # 세션 행 잠금: /end와 충돌 방지
             cur.execute("""
                 SELECT *
                 FROM sessions
-                WHERE session_id=%s
+                WHERE session_id = %s
                 FOR UPDATE
             """, (session_id,))
 
             session = cur.fetchone()
 
             if session is None:
-                raise APIError(
-                    404,
+                raise ApiError(
                     "SESSION_NOT_FOUND",
-                    "세션이 존재하지 않습니다."
+                    "세션이 존재하지 않습니다.",
+                    404
                 )
 
             if session["ended_at"] is not None:
-                raise APIError(
-                    409,
+                conflict(
                     "SESSION_CLOSED",
                     "이미 종료된 세션입니다."
                 )
@@ -540,14 +654,6 @@ def save_posture_events(session_id):
 
         db.commit()
 
-        return jsonify({
-            "ok": True,
-            "received_count": len(events),
-            "saved": saved,
-            "updated": updated,
-            "ignored": ignored
-        })
-
     except Exception:
         db.rollback()
         raise
@@ -555,62 +661,70 @@ def save_posture_events(session_id):
     finally:
         db.close()
 
+    return jsonify({
+        "ok": True,
+        "received_count": len(events),
+        "saved": saved,
+        "updated": updated,
+        "ignored": ignored
+    })
 
-# -------------------------------------------
-# 8. API 3 : 세션 종료
-# -------------------------------------------
+
+# ==========================================
+# 10. API 3: 세션 종료
+# ==========================================
 
 @app.post("/api/sessions/<int:session_id>/end")
-def end_monitoring(session_id):
+def end_session_api(session_id):
+
     data = body_json()
 
     ended = parse_ms(
-        data.get("ended_at_ms", now_ms()),
+        data.get("ended_at_ms"),
         "ended_at_ms"
     )
 
-    reason = data.get("reason", "camera_off")
+    reason = data.get("reason")
 
     if reason not in {
-        "camera_off",
-        "pagehide",
-        "input_ended"
+        "camera_off", "pagehide", "input_ended"
     }:
-        raise ValueError("종료 사유가 올바르지 않습니다.")
+        invalid("종료 사유가 올바르지 않습니다.")
 
     db = get_db()
 
     try:
         with db.cursor() as cur:
+
             cur.execute("""
                 SELECT *
                 FROM sessions
-                WHERE session_id=%s
+                WHERE session_id = %s
                 FOR UPDATE
             """, (session_id,))
 
             session = cur.fetchone()
 
             if session is None:
-                raise APIError(
-                    404,
+                raise ApiError(
                     "SESSION_NOT_FOUND",
-                    "세션이 존재하지 않습니다."
+                    "세션이 존재하지 않습니다.",
+                    404
                 )
 
-            # 이미 종료됐다면 기존 결과 그대로 반환
+            # 이미 종료됐다면 기존 결과만 반환
             if session["ended_at"] is None:
-                started = epoch_ms(session["started_at"])
-
-                if ended < started:
-                    raise ValueError(
-                        "종료 시각이 시작보다 빠릅니다."
-                    )
 
                 events = prepare_events(
                     data.get("events", [])
                 )
 
+                started = epoch_ms(session["started_at"])
+
+                if ended < started:
+                    invalid("종료 시각이 시작보다 빠릅니다.")
+
+                # 종료 요청에 동봉한 마지막 이벤트 저장
                 upsert_events(
                     cur,
                     session_id,
@@ -622,96 +736,110 @@ def end_monitoring(session_id):
                 cur.execute("""
                     SELECT event_id, started_at, ended_at
                     FROM posture_events
-                    WHERE session_id=%s
+                    WHERE session_id = %s
                     ORDER BY started_at, event_id
                     FOR UPDATE
                 """, (session_id,))
 
                 rows = cur.fetchall()
 
-                # NULL 이벤트는 다음 이벤트 시작 시각,
-                # 마지막 이벤트는 세션 종료 시각에 마감
                 for i, row in enumerate(rows):
-                    start = epoch_ms(row["started_at"])
 
-                    next_start = (
-                        epoch_ms(rows[i + 1]["started_at"])
-                        if i + 1 < len(rows)
-                        else ended
+                    event_start = epoch_ms(
+                        row["started_at"]
                     )
 
+                    # 다음 이벤트가 있으면 다음 시작 시각,
+                    # 마지막 이벤트면 세션 종료 시각을 상한으로 사용
+                    if i + 1 < len(rows):
+                        limit = epoch_ms(
+                            rows[i + 1]["started_at"]
+                        )
+                    else:
+                        limit = ended
+
+                    limit = min(limit, ended)
+
+                    if event_start > ended:
+                        conflict(
+                            "EVENT_OUT_OF_RANGE",
+                            "세션 종료 이후 시작한 이벤트입니다."
+                        )
+
                     if row["ended_at"] is None:
-                        if next_start < start:
-                            raise APIError(
-                                409,
-                                "EVENT_OVERLAP",
-                                "이벤트 시간 순서가 잘못됐습니다."
+                        # NULL 이벤트의 종료 시각 확정
+                        if limit < event_start:
+                            conflict(
+                                "EVENT_OUT_OF_RANGE",
+                                "이벤트 시간 범위가 잘못됐습니다."
                             )
 
                         cur.execute("""
                             UPDATE posture_events
-                            SET ended_at=%s, duration_sec=%s
-                            WHERE event_id=%s
+                            SET
+                                ended_at = %s,
+                                duration_sec = %s
+                            WHERE event_id = %s
                         """, (
-                            utc_dt(next_start),
-                            round((next_start - start) / 1000, 3),
+                            utc_dt(limit),
+                            round(
+                                (limit - event_start) / 1000,
+                                3
+                            ),
                             row["event_id"]
                         ))
 
                     elif epoch_ms(row["ended_at"]) > ended:
-                        raise APIError(
-                            409,
+                        conflict(
                             "EVENT_OUT_OF_RANGE",
-                            "세션 종료 이후의 이벤트입니다."
+                            "이벤트 종료가 세션 종료보다 늦습니다."
                         )
 
+                # 최종 종료 시각으로 다시 중복 검사
                 validate_overlaps(cur, session_id)
 
+                # 유효 자세 시간 합산
                 cur.execute("""
-                    SELECT COALESCE(
-                        SUM(e.duration_sec), 0
-                    ) AS valid
+                    SELECT
+                        COALESCE(SUM(e.duration_sec), 0)
+                            AS valid_seconds
                     FROM posture_events e
                     JOIN posture_states s
-                        ON e.state=s.state
-                    WHERE e.session_id=%s
-                    AND s.is_counted=1
+                      ON s.state = e.state
+                    WHERE e.session_id = %s
+                      AND s.is_counted = 1
                 """, (session_id,))
 
-                valid = float(cur.fetchone()["valid"])
-                total = (ended - started) // 1000
+                valid_seconds = float(
+                    cur.fetchone()["valid_seconds"]
+                )
+
+                total_seconds = (ended - started) // 1000
 
                 cur.execute("""
                     UPDATE sessions
                     SET
-                        ended_at=%s,
-                        total_duration_sec=%s,
-                        valid_duration_sec=%s
-                    WHERE session_id=%s
+                        ended_at = %s,
+                        total_duration_sec = %s,
+                        valid_duration_sec = %s
+                    WHERE session_id = %s
                 """, (
                     utc_dt(ended),
-                    total,
-                    round(valid),
+                    total_seconds,
+                    round(valid_seconds),
                     session_id
                 ))
 
+            # 최초 종료 결과를 다시 조회
             cur.execute("""
                 SELECT *
                 FROM sessions
-                WHERE session_id=%s
+                WHERE session_id = %s
             """, (session_id,))
 
             result = cur.fetchone()
 
         db.commit()
-
-        return jsonify({
-            "ok": True,
-            "session_id": session_id,
-            "ended_at_ms": epoch_ms(result["ended_at"]),
-            "total_duration_sec": result["total_duration_sec"],
-            "valid_duration_sec": result["valid_duration_sec"]
-        })
 
     except Exception:
         db.rollback()
@@ -720,61 +848,82 @@ def end_monitoring(session_id):
     finally:
         db.close()
 
+    return jsonify({
+        "ok": True,
+        "session_id": session_id,
+        "ended_at_ms": epoch_ms(result["ended_at"]),
+        "total_duration_sec": result["total_duration_sec"],
+        "valid_duration_sec": result["valid_duration_sec"]
+    })
 
-# -------------------------------------------
-# 9. 통계 기간 계산
-# -------------------------------------------
+
+# ==========================================
+# 11. 기간 계산
+# ==========================================
 
 def period_bounds(period, as_of):
-    current = datetime.fromtimestamp(
-        as_of / 1000, KST
-    )
+    """
+    조회 기간과 이전 비교 기간을 계산한다.
+
+    today:
+        오늘 00:00 ~ 현재
+        전날 00:00 ~ 전날 같은 시각
+
+    week:
+        오늘 포함 최근 7일
+        직전 7일
+
+    month:
+        오늘 포함 최근 30일
+        직전 30일
+    """
+
+    current = to_kst(as_of)
 
     midnight = current.replace(
-        hour=0, minute=0, second=0, microsecond=0
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0
     )
 
     if period == "today":
         start = midnight
-        previous = start - timedelta(days=1)
+        prev_start = start - timedelta(days=1)
+        prev_end = current - timedelta(days=1)
 
-    elif period in ("week", "month"):
-        days = 7 if period == "week" else 30
-        start = midnight - timedelta(days=days - 1)
-        previous = start - timedelta(days=days)
+    elif period == "week":
+        start = midnight - timedelta(days=6)
+        prev_start = start - timedelta(days=7)
+        prev_end = start
+
+    elif period == "month":
+        start = midnight - timedelta(days=29)
+        prev_start = start - timedelta(days=30)
+        prev_end = start
 
     else:
-        raise ValueError(
-            "period는 today, week, month만 허용합니다."
-        )
+        invalid("period는 today, week, month만 가능합니다.")
 
     return (
         int(start.timestamp() * 1000),
-        int(previous.timestamp() * 1000)
+        int(prev_start.timestamp() * 1000),
+        int(prev_end.timestamp() * 1000)
     )
 
 
-def get_as_of():
-    raw = request.args.get("as_of_ms")
-
-    if raw is None:
-        return now_ms()
-
-    try:
-        value = int(raw)
-    except ValueError:
-        raise ValueError(
-            "as_of_ms는 밀리초 정수여야 합니다."
-        )
-
-    return parse_ms(value, "as_of_ms")
-
-
-# -------------------------------------------
-# 10. 기간에 걸친 이벤트 조회
-# -------------------------------------------
+# ==========================================
+# 12. DB에서 이벤트 조회
+# ==========================================
 
 def load_events(db, start, end):
+    """
+    조회 기간과 겹치는 확정 관측 구간을 가져온다.
+
+    진행 중 자세도 C가 스냅샷을 저장했다면
+    ended_at 값이 존재하므로 조회할 수 있다.
+    """
+
     if end <= start:
         return []
 
@@ -800,54 +949,112 @@ def load_events(db, start, end):
     result = []
 
     for row in rows:
-        a = epoch_ms(row["started_at"])
-        b = epoch_ms(row["ended_at"])
+        event_start = epoch_ms(row["started_at"])
+        event_end = epoch_ms(row["ended_at"])
 
-        overlap = max(
+        # 조회 기간과 겹치는 부분만 계산
+        overlap_ms = max(
             0,
-            min(b, end) - max(a, start)
-        ) / 1000
+            min(event_end, end) -
+            max(event_start, start)
+        )
 
-        if overlap > 0:
-            result.append({
-                "id": row["event_id"],
-                "state": row["state"],
-                "started_ms": a,
-                "ended_ms": b,
-                "duration_sec": overlap
-            })
+        if overlap_ms <= 0:
+            continue
+
+        result.append({
+            "id": row["event_id"],
+            "state": row["state"],
+            "started_ms": event_start,
+            "ended_ms": event_end,
+            "duration_sec": overlap_ms / 1000
+        })
 
     return result
 
 
-def aggregate(events, start, end):
+def load_started_events(db, start, end):
+    """
+    발생 횟수용 조회.
+
+    측정 시간과 달리 이벤트 시작 시각으로 판단한다.
+    종료 시각이 NULL이어도 시작 기록은 존재할 수 있다.
+    """
+
+    with db.cursor() as cur:
+        cur.execute("""
+            SELECT event_id, state, started_at
+            FROM posture_events
+            WHERE started_at >= %s
+              AND started_at < %s
+              AND state IN ('TURTLE', 'WAIST')
+            ORDER BY started_at, event_id
+        """, (
+            utc_dt(start),
+            utc_dt(end)
+        ))
+
+        rows = cur.fetchall()
+
+    return [
+        {
+            "id": row["event_id"],
+            "state": row["state"],
+            "started_ms": epoch_ms(row["started_at"])
+        }
+        for row in rows
+    ]
+
+
+# ==========================================
+# 13. 통계 집계
+# ==========================================
+
+def aggregate(events, started_events):
+    """
+    측정 시간은 기간과 겹치는 부분으로 계산.
+    발생 횟수는 이벤트 시작 시각으로 계산.
+    """
+
     seconds = {
-        state: 0.0 for state in VALID_STATES
+        state: 0.0
+        for state in VALID_STATES
     }
 
-    turtle_count = 0
-    shrimp_count = 0
     bad_durations = []
 
     for event in events:
         state = event["state"]
-        seconds[state] += event["duration_sec"]
+        duration = event["duration_sec"]
 
-        if start <= event["started_ms"] < end:
-            if state == "TURTLE":
-                turtle_count += 1
-                bad_durations.append(
-                    event["duration_sec"]
-                )
+        seconds[state] += duration
 
-            elif state == "WAIST":
-                shrimp_count += 1
-                bad_durations.append(
-                    event["duration_sec"]
-                )
+        if state in BAD_STATES:
+            bad_durations.append(duration)
 
     measured = sum(
-        seconds[state] for state in COUNTED
+        seconds[state]
+        for state in COUNTED_STATES
+    )
+
+    turtle_count = sum(
+        1 for event in started_events
+        if event["state"] == "TURTLE"
+    )
+
+    shrimp_count = sum(
+        1 for event in started_events
+        if event["state"] == "WAIST"
+    )
+
+    good_ratio = (
+        seconds["GOOD"] / measured * 100
+        if measured > 0 else None
+    )
+
+    avg_duration = (
+        sum(bad_durations) / len(bad_durations)
+        if bad_durations else None
     )
 
     return {
@@ -855,31 +1062,39 @@ def aggregate(events, start, end):
         "measuredSec": measured,
         "turtleCount": turtle_count,
         "shrimpCount": shrimp_count,
-        "goodRatio": (
-            seconds["GOOD"] / measured * 100
-            if measured > 0 else None
-        ),
-        "avgDurationSec": (
-            sum(bad_durations) / len(bad_durations)
-            if bad_durations else None
-        )
+        "goodRatio": good_ratio,
+        "avgDurationSec": avg_duration
     }
 
 
-def round_value(value):
+def round_or_none(value):
     if value is None:
         return None
 
     return round(float(value), 2)
 
 
-# -------------------------------------------
-# 11. API 4 : 홈 누적 측정 시간
-# -------------------------------------------
+def as_of_arg():
+    raw = request.args.get("as_of_ms")
+
+    if raw is None:
+        return now_ms()
+
+    try:
+        return parse_ms(int(raw), "as_of_ms")
+    except (ValueError, TypeError):
+        invalid("as_of_ms는 밀리초 정수여야 합니다.")
+
+
+# ==========================================
+# 14. API 4: 홈 누적 측정 시간
+# ==========================================
 
 @app.get("/api/summary/home")
 def home_summary():
-    as_of = get_as_of()
+
+    as_of = as_of_arg()
+
     db = get_db()
 
     try:
@@ -887,57 +1102,148 @@ def home_summary():
     finally:
         db.close()
 
-    counted = [
-        e for e in events
-        if e["state"] in COUNTED
+    valid_events = [
+        event for event in events
+        if event["state"] in COUNTED_STATES
     ]
 
-    measured = (
-        round(sum(e["duration_sec"] for e in counted))
-        if counted else None
+    if not valid_events:
+        return jsonify({
+            "measured_sec": None
+        })
+
+    measured = sum(
+        event["duration_sec"]
+        for event in valid_events
     )
 
     return jsonify({
-        "measured_sec": measured
+        "measured_sec": round(measured)
     })
 
 
-# -------------------------------------------
-# 12. API 5 : 기간별 통계
-# -------------------------------------------
+# ==========================================
+# 15. 추이 데이터 생성
+# ==========================================
+
+def build_trend(
+    started_events,
+    start,
+    as_of,
+    unit
+):
+    """
+    TURTLE / WAIST 발생 횟수를
+    날짜 또는 주 단위로 묶는다.
+    """
+
+    buckets = {}
+
+    for event in started_events:
+        date = to_kst(
+            event["started_ms"]
+        ).date()
+
+        if unit == "week":
+            date -= timedelta(days=date.weekday())
+
+        key = date.isoformat()
+
+        if key not in buckets:
+            buckets[key] = {
+                "turtle": 0,
+                "shrimp": 0
+            }
+
+        kind = (
+            "turtle"
+            if event["state"] == "TURTLE"
+            else "shrimp"
+        )
+
+        buckets[key][kind] += 1
+
+    # 기록이 없는 날짜도 0으로 채움
+    cursor = to_kst(start).date()
+    last_date = to_kst(as_of).date()
+
+    keys = []
+
+    while cursor <= last_date:
+        date = cursor
+
+        if unit == "week":
+            date -= timedelta(days=date.weekday())
+
+        key = date.isoformat()
+
+        if key not in keys:
+            keys.append(key)
+
+        cursor += timedelta(days=1)
+
+    return {
+        kind: [
+            {
+                "label": key[5:].replace("-", "/"),
+                "count": buckets.get(key, {}).get(kind, 0)
+            }
+            for key in keys
+        ]
+        for kind in ("turtle", "shrimp")
+    }
+
+
+# ==========================================
+# 16. API 5: 기간별 통계
+# ==========================================
 
 @app.get("/api/stats")
-def get_statistics():
+def stats_api():
+
     period = request.args.get("period", "today")
     unit = request.args.get("unit", "day")
 
-    if unit not in ("day", "week"):
-        raise ValueError(
-            "unit은 day 또는 week만 허용합니다."
-        )
+    if unit not in {"day", "week"}:
+        invalid("unit은 day 또는 week여야 합니다.")
 
-    as_of = get_as_of()
-    start, previous_start = period_bounds(
+    as_of = as_of_arg()
+
+    start, prev_start, prev_end = period_bounds(
         period, as_of
     )
 
     db = get_db()
 
     try:
+        # 현재 기간
         current_events = load_events(
             db, start, as_of
         )
 
-        previous_events = load_events(
-            db, previous_start, start
+        current_started = load_started_events(
+            db, start, as_of
         )
+
+        # 이전 비교 기간
+        previous_events = load_events(
+            db, prev_start, prev_end
+        )
+
+        previous_started = load_started_events(
+            db, prev_start, prev_end
+        )
+
     finally:
         db.close()
 
-    if not any(
-        e["state"] in COUNTED
-        for e in current_events
-    ):
+    # 유효 측정 기록이 전혀 없을 경우
+    has_current_data = any(
+        event["state"] in COUNTED_STATES
+        for event in current_events
+    )
+
+    if not has_current_data:
         return jsonify({
             "summary": None,
             "trend": {
@@ -949,19 +1255,27 @@ def get_statistics():
         })
 
     current = aggregate(
-        current_events, start, as_of
+        current_events,
+        current_started
     )
 
     previous = aggregate(
-        previous_events, previous_start, start
+        previous_events,
+        previous_started
     )
 
+    has_previous_data = any(
+        event["state"] in COUNTED_STATES
+        for event in previous_events
+    )
+
+    # 각 지표의 현재값과 이전값 구성
     def metric(key):
         return {
-            "value": round_value(current[key]),
+            "value": round_or_none(current[key]),
             "prev": (
-                round_value(previous[key])
-                if previous_events else None
+                round_or_none(previous[key])
+                if has_previous_data else None
             )
         }
 
@@ -976,129 +1290,66 @@ def get_statistics():
         )
     }
 
-    # 일별/주별 거북목 및 새우등 횟수
-    buckets = {}
+    trend = build_trend(
+        current_started,
+        start,
+        as_of,
+        unit
+    )
 
-    for event in current_events:
-        if event["state"] not in ("TURTLE", "WAIST"):
-            continue
-
-        if not start <= event["started_ms"] < as_of:
-            continue
-
-        dt = datetime.fromtimestamp(
-            event["started_ms"] / 1000, KST
-        )
-
-        if unit == "day":
-            key = dt.date().isoformat()
-        else:
-            key = (
-                dt.date() -
-                timedelta(days=dt.weekday())
-            ).isoformat()
-
-        bucket = buckets.setdefault(
-            key, {"turtle": 0, "shrimp": 0}
-        )
-
-        kind = (
-            "turtle"
-            if event["state"] == "TURTLE"
-            else "shrimp"
-        )
-
-        bucket[kind] += 1
-
-    # 기록이 없는 날짜도 0으로 채움
-    trend_keys = []
-
-    cursor = datetime.fromtimestamp(
-        start / 1000, KST
-    ).date()
-
-    last = datetime.fromtimestamp(
-        as_of / 1000, KST
-    ).date()
-
-    while cursor <= last:
-        if unit == "day":
-            key = cursor.isoformat()
-        else:
-            key = (
-                cursor -
-                timedelta(days=cursor.weekday())
-            ).isoformat()
-
-        if key not in trend_keys:
-            trend_keys.append(key)
-
-        cursor += timedelta(days=1)
-
-    trend = {
-        kind: [
-            {
-                "label": key[5:].replace("-", "/"),
-                "count": buckets.get(
-                    key, {}
-                ).get(kind, 0)
-            }
-            for key in trend_keys
-        ]
-        for kind in ("turtle", "shrimp")
-    }
-
+    # 자세별 측정 시간 분포
     total = current["measuredSec"]
 
-    mapping = [
-        ("good", "GOOD"),
-        ("turtle", "TURTLE"),
-        ("shrimp", "WAIST"),
-        ("other", "CLOSE")
-    ]
-
     distribution = {
-        "totalSec": round_value(total),
+        "totalSec": round_or_none(total),
         "items": [
             {
-                "type": label,
-                "sec": round_value(
+                "type": TYPE_MAP[state],
+                "sec": round_or_none(
                     current["seconds"][state]
                 ),
-                "ratio": round_value(
+                "ratio": round_or_none(
                     current["seconds"][state] / total * 100
                 )
             }
-            for label, state in mapping
+            for state in (
+                "GOOD",
+                "TURTLE",
+                "WAIST",
+                "CLOSE"
+            )
         ]
     }
 
-    type_map = {
-        "GOOD": "good",
-        "TURTLE": "turtle",
-        "WAIST": "shrimp"
-    }
+    # 최근 자세 기록
+    records = []
 
-    records = [
-        {
-            "id": e["id"],
-            "startedAt": e["started_ms"],
-            "type": type_map[e["state"]],
-            "durationSec": round_value(
-                e["duration_sec"]
+    for event in current_events:
+
+        if event["state"] not in {
+            "GOOD", "TURTLE", "WAIST"
+        }:
+            continue
+
+        if not (
+            start <= event["started_ms"] < as_of
+        ):
+            continue
+
+        records.append({
+            "id": event["id"],
+            "startedAt": event["started_ms"],
+            "type": TYPE_MAP[event["state"]],
+            "durationSec": round_or_none(
+                event["duration_sec"]
             )
-        }
-        for e in sorted(
-            current_events,
-            key=lambda x: (
-                -x["started_ms"], x["id"]
-            )
-        )
-        if (
-            e["state"] in type_map
-            and start <= e["started_ms"] < as_of
-        )
-    ][:100]
+        })
+
+    records.sort(
+        key=lambda x: (-x["startedAt"], x["id"])
+    )
+
+    records = records[:100]
 
     return jsonify({
         "summary": summary,
@@ -1108,13 +1359,15 @@ def get_statistics():
     })
 
 
-# -------------------------------------------
-# 13. 서버 실행
-# -------------------------------------------
+# ==========================================
+# 17. Flask 실행
+# ==========================================
 
 if __name__ == "__main__":
+    # 없는 테이블만 생성
     init_db()
 
+    # 로컬 개발 환경
     app.run(
         host="127.0.0.1",
         port=5000,
