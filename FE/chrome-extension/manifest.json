@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "거북목 거북이",
+  "version": "1.1.0",
+  "description": "NeckCare에서 거북목 알림이 켜지면 다른 웹페이지에도 경고창과 거북이를 표시합니다.",
+  "permissions": ["storage"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "거북목 거북이" },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["overlay.js", "content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}
