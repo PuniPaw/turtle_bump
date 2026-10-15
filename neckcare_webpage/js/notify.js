@@ -1,7 +1,7 @@
 // 알림 강도 설정과 알림 실행.
 //   - 미리보기: previewNotification(level) — 버튼을 누를 때만 실행, 약 3초 뒤 자동 종료
-//   - 실제 감지 알림: startPostureAlert(level) / stopPostureAlert() — 지금은 어디서도 호출하지 않는다.
-//     [연결 위치] B(판정) 파트: 거북목으로 판정되면 startPostureAlert(), 정상 자세로 돌아오면 stopPostureAlert().
+//   - 실제 감지 알림: startPostureAlert(level, { kind }) / stopPostureAlert()
+//     posture-adapter.js가 호출한다: 거북목·허리 굽음이 약 5초 이어지면 시작, 바른 자세로 돌아오면 종료.
 //     (window.neckcare.alerts.start / stop 으로도 접근 가능)
 // 실제 감지 알림은 Chrome 확장 프로그램(turtle-extension)에도 전달되어 다른 웹사이트에 표시된다.
 import './alert-overlay.js';

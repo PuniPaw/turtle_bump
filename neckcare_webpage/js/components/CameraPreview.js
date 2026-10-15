@@ -58,13 +58,6 @@ export function mountCameraPreview(el, { onConnectClick, onDisconnectClick } = {
           </button>
         </div>
 
-        <div class="camera__viewer-wait" data-role="viewer-wait" hidden>
-          <h2 class="camera__title">폰 카메라 연결 대기 중</h2>
-          <p class="camera__desc">폰 브라우저로 아래 주소를 열면 자동으로 연결됩니다.</p>
-          <p class="camera__code" data-role="viewer-url">연결 준비 중...</p>
-          <p class="camera__code camera__code--big" data-role="viewer-code"></p>
-        </div>
-
         <div class="camera__metric" aria-label="목 기울기 각도">
           <span class="camera__metric-label">목 기울기 각도</span>
           <strong class="camera__metric-value" data-role="angle">—</strong>
@@ -89,18 +82,12 @@ export function mountCameraPreview(el, { onConnectClick, onDisconnectClick } = {
   });
 
   let lastState = null;
-  let waiting = null; // null | { url, code }
 
   function paint() {
     if (!lastState) return;
     const { connected } = lastState.camera;
     root.dataset.connected = String(connected);
-    q('empty').hidden = connected || Boolean(waiting);
-    q('viewer-wait').hidden = connected || !waiting;
-    if (waiting) {
-      q('viewer-url').textContent = waiting.url || '연결 준비 중...';
-      q('viewer-code').textContent = waiting.code || '';
-    }
+    q('empty').hidden = connected;
     video.hidden = !connected;
     overlay.hidden = !connected;
     q('cam-badge-text').textContent = connected ? '카메라 ON (클릭하여 끄기)' : '카메라 OFF';
@@ -114,15 +101,6 @@ export function mountCameraPreview(el, { onConnectClick, onDisconnectClick } = {
 
   return {
     getElements: () => ({ video, overlay }),
-    // 폰 카메라를 기다리는 동안 방 코드/접속 주소를 보여준다. info가 없으면 숨긴다.
-    showViewerWait(info) {
-      waiting = info ?? {};
-      paint();
-    },
-    hideViewerWait() {
-      waiting = null;
-      paint();
-    },
     // 초기 자세 설정 안내(문구·카운트다운). 진행 관리는 calibration.js가 한다.
     // phase: 'guide' | 'countdown' | 'checking' | 'waiting' | 'connected' | 'start' | 'failed'
     showCalibration({ phase, text = '', count = null }) {

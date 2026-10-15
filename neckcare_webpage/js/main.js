@@ -1,8 +1,6 @@
-import { TEST_MODE } from './test-mode.js';   // 반드시 첫 import(?mock=1일 때만 Mock 서버 주소로 전환)
 import { initialState, createStore } from './state.js';
 import { showToast } from './ui/toast.js';
 import { startCamera, hasCamera } from './pose.js';
-import { startViewer } from './webrtc.js';
 import {
   loadNotifyLevel, saveNotifyLevel, syncExtensionLevel,
   previewNotification, startPostureAlert, stopPostureAlert, isPostureAlertActive,
@@ -10,7 +8,6 @@ import {
 import { mountSidebar } from './components/Sidebar.js';
 import { mountHeader } from './components/Header.js';
 import { mountCameraPreview } from './components/CameraPreview.js';
-import { renderAlertBanner } from './components/AlertBanner.js';
 import { renderPostureStatus, renderMeasureTime } from './components/PostureStatus.js';
 import { renderPostureTips } from './components/PostureTips.js';
 import { mountNotifySettings } from './components/NotifySettings.js';
@@ -69,29 +66,12 @@ const camera = mountCameraPreview($('camera'), {
       return;
     }
 
-    // 카메라가 없는 기기에서는 폰 카메라를 받아온다(WebRTC).
-    camera.showViewerWait(null);
-    cameraSession = startViewer(video, {
-      onRoom(code) {
-        camera.showViewerWait({ url: `${location.origin}/phone.html?room=${code}`, code });
-      },
-      onConnected() {
-        camera.hideViewerWait();
-        onCameraConnected();
-      },
-      onError(err) {
-        console.error(err);
-        camera.hideViewerWait();
-        store.setState({ camera: { connected: false, error: err.message } });
-        showToast(`폰 카메라 연결 실패: ${err.message}`);
-        cameraSession = null;
-      },
-    });
+    // 이 기기에 연결된 웹캠이 없으면 안내만 한다.
+    showToast('연결된 웹캠을 찾을 수 없어요. 웹캠을 연결한 뒤 다시 시도해 주세요.');
   },
   onDisconnectClick() {
     cameraSession?.stop();
     cameraSession = null;
-    camera.hideViewerWait();
     store.setState({ camera: { connected: false, error: null } });
   },
 });
@@ -149,7 +129,6 @@ function render(state) {
   statsPage.update(state);
   header.update(state);
   camera.update(state);
-  renderAlertBanner($('alert'), state, { onDismiss: () => store.setState({ alert: null }) });
   renderPostureStatus($('posture-status'), state);
   renderMeasureTime($('measure-time'), state);
 }
@@ -264,12 +243,3 @@ window.neckcare = {
   getAnalyzer: () => bAnalyzer,   // 디버그용: neckcare.getAnalyzer().getDebug()
   getRecorder: () => recorder,    // 디버그용: neckcare.getRecorder().getStatus()
 };
-
-// 테스트 모드(?mock=1)에서만: B 결과 형식의 테스트 입력을 Adapter에 넣는 통로(카메라 없이 통합 테스트용)
-if (TEST_MODE) {
-  window.neckcare.test = {
-    feed(state) {
-      postureAdapter.handleResult({ source: 'test', state, state_since: Date.now(), duration_ms: 0, timestamp: Date.now(), needs_recalibration: false });
-    },
-  };
-}
