@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<style>
+  body {
+    width: 260px; margin: 0; padding: 16px;
+    font: 14px/1.5 "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    color: #1f2a24; background: #eef2ec;
+  }
+  h1 { font-size: 16px; margin: 0 0 8px; }
+  .pill {
+    display: inline-block; font-weight: 600; padding: 4px 12px; border-radius: 999px;
+    background: #dcefe3; color: #2f8a57; margin-bottom: 8px;
+  }
+  .pill.bad { background: #fbe6da; color: #c2551f; }
+  .level { margin: 0 0 12px; font-size: 13px; color: #5d6b62; }
+  .level strong { color: #1f2a24; }
+  button {
+    width: 100%; font: inherit; font-weight: 600; padding: 9px; border-radius: 8px;
+    border: 1px solid #c2551f; background: #c2551f; color: #fff; cursor: pointer;
+  }
+  button:disabled { opacity: .6; cursor: default; }
+  p { font-size: 12px; color: #5d6b62; margin: 10px 0 0; }
+  #result:empty { display: none; }
+  #result { color: #1f2a24; font-weight: 600; }
+</style>
+</head>
+<body>
+  <h1>거북목 거북이</h1>
+  <span class="pill" id="pill">알림 대기 중</span>
+  <p class="level">알림 강도: <strong id="level">중간</strong> (NeckCare에서 설정)</p>
+  <button id="preview" type="button">현재 탭에서 미리보기</button>
+  <p id="result"></p>
+  <p>NeckCare 웹페이지에서 거북목이 감지되면 다른 웹사이트에도 자동으로 표시됩니다.</p>
+  <script src="popup.js"></script>
+</body>
+</html>

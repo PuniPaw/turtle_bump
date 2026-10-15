@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NeckCare</title>
+  <meta name="description" content="웹캠 기반 거북목 자세 모니터링 대시보드" />
+  <!-- 확장 프로그램(turtle-extension)이 이 페이지를 NeckCare 앱으로 인식하는 표시 -->
+  <meta name="neckcare-app" content="1" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar"></aside>
+
+    <main class="main">
+      <!-- 홈 화면. 통계로 이동해도 숨기기만 하므로 카메라 영상·스트림은 그대로 유지된다. -->
+      <section class="view" data-view="home">
+      <header class="page-head" id="header"></header>
+
+      <div class="home-grid">
+        <div class="home-grid__camera" id="camera"></div>
+        <div class="home-grid__side">
+          <div id="posture-status"></div>
+          <div id="measure-time"></div>
+        </div>
+        <div class="home-grid__wide" id="notify"></div>
+        <div class="home-grid__wide" id="tips"></div>
+      </div>
+      </section>
+
+      <!-- 통계 화면 -->
+      <section class="view" data-view="stats" id="stats-page" hidden></section>
+    </main>
+  </div>
+
+  <div class="toast-root" id="toast-root" aria-live="polite"></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
