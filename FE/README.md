@@ -4,16 +4,17 @@
 
 **카메라 입력은 PC에 직접 연결된 웹캠(노트북 내장 카메라 또는 USB 웹캠)만 사용합니다.**
 
-이 폴더에는 **서비스 실행에 필요한 파일만** 들어 있습니다(38개, 테스트·미사용 코드 제외).
+이 `FE` 폴더에는 **프론트엔드 산출물(웹페이지, Chrome 확장 프로그램)**이 들어 있습니다.
+**Flask 백엔드(D 담당)는 별도 브랜치에서 관리합니다.** 저장·통계를 쓰려면 그 백엔드(`app.py`)를 함께 실행합니다.
 
 ---
 
 ## 1. 폴더 구조
 
 ```
-neckcare_final\
+FE\
 ├─ README.md                  이 문서
-├─ neckcare_webpage\          웹페이지 (화면 서버 포함)
+├─ webpage\                   웹페이지 (화면 서버 포함)
 │  ├─ index.html              메인 화면
 │  ├─ favicon.svg             아이콘 (Windows 알림 아이콘으로도 사용)
 │  ├─ server.py               화면 서버, 정적 파일 제공 (파이썬 표준 라이브러리만 사용)
@@ -25,12 +26,10 @@ neckcare_final\
 │     ├─ components\          화면 부품
 │     ├─ ui\, utils\          안내 문구, 형식 변환
 │     └─ (그 밖)              카메라, 초기 설정, 알림, 저장 연동, 통계 조회
-├─ backend\                   Flask REST API (MariaDB)
-│  ├─ app.py                  서버 (127.0.0.1:5000)
-│  ├─ requirements.txt        파이썬 패키지 목록
-│  └─ .env                    DB 접속 정보 (비공개. 공유·업로드 금지)
-└─ turtle-extension\          Chrome 확장 프로그램 (다른 사이트에도 알림 표시)
+└─ chrome-extension\          Chrome 확장 프로그램 (다른 사이트에도 알림 표시)
 ```
+
+함께 실행하는 백엔드(별도 브랜치, D 담당): `app.py`(127.0.0.1:5000), `requirements.txt`, `.env`(DB 접속 정보, 비공개).
 
 ---
 
@@ -42,11 +41,12 @@ neckcare_final\
 | **설치 필요** | 파이썬 패키지: flask, flask-cors, mysqlclient, python-dotenv | ✗ → `requirements.txt`로 설치 |
 | **설치 필요** | MariaDB 서버 + `turtle_bump` 데이터베이스 | ✗ → 4장 |
 | **설치 필요** | Chrome 브라우저 | ✗ |
-| **설정 필요** | `backend\.env`의 DB 접속 정보를 그 PC의 MariaDB에 맞게 변경 | 파일은 있음(값은 현재 PC 기준) |
+| **설치 필요** | Flask 백엔드(`app.py`, 별도 브랜치) | ✗ |
+| **설정 필요** | 백엔드 폴더의 `.env`에 그 PC의 MariaDB 접속 정보 입력 | ✗ |
 | **인터넷 필요** | MediaPipe 라이브러리·wasm (`cdn.jsdelivr.net`) | ✗ (실행할 때 내려받음) |
 | **인터넷 필요** | MediaPipe 모델 파일 3개 (`storage.googleapis.com`) | ✗ (첫 카메라 연결 때 내려받음, 약 10초) |
 | **인터넷 필요** | Pretendard 글꼴 (`cdn.jsdelivr.net`) | ✗ (없으면 기본 글꼴로 표시) |
-| 포함됨 | 웹페이지·판정 모듈·백엔드 코드·확장 프로그램 | ✅ |
+| 포함됨 | 웹페이지·판정 모듈·확장 프로그램 | ✅ |
 | 옮기지 않음 | 측정 기록(DB 데이터) | ✗ (MariaDB에 저장됨) |
 
 > 판정은 브라우저 안에서만 합니다. 카메라 영상은 서버로 보내지 않습니다.
@@ -55,14 +55,15 @@ neckcare_final\
 
 ## 3. 파이썬 패키지 설치 (처음 한 번)
 
+백엔드 폴더(`app.py`가 있는 곳)에서 실행합니다.
+
 ```bash
-cd neckcare_final\backend
 python -m pip install -r requirements.txt
 ```
 
 - 꼭 `python -m pip`을 쓰세요. `pip`만 쓰면 다른 파이썬(예: Anaconda)에 설치될 수 있습니다.
 - 가상환경을 쓴다면 먼저 활성화한 뒤 설치합니다.
-  - 이 PC에서는 `C:\works\myproject\projects\turtle_project\.venv`에 이미 설치되어 있습니다.
+- 웹페이지 서버(`webpage\server.py`)는 파이썬 표준 라이브러리만 써서 추가 설치가 필요 없습니다.
 
 ---
 
@@ -73,7 +74,7 @@ python -m pip install -r requirements.txt
    ```sql
    CREATE DATABASE IF NOT EXISTS turtle_bump CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
    ```
-3. `backend\.env`에 다음 항목이 있어야 합니다. 값은 그 PC의 MariaDB에 맞게 직접 넣습니다.
+3. 백엔드 폴더의 `.env`에 다음 항목이 있어야 합니다. 값은 그 PC의 MariaDB에 맞게 직접 넣습니다.
    ```
    DB_HOST=
    DB_PORT=
@@ -93,8 +94,8 @@ python -m pip install -r requirements.txt
 | 순서 | 할 일 | 명령 | 주소 |
 |---|---|---|---|
 | 1 | MariaDB 실행 확인 | (서비스로 자동 실행) | 3306 |
-| 2 | 백엔드 실행 | `cd neckcare_final\backend` → `python app.py` | http://127.0.0.1:5000 |
-| 3 | 웹페이지 서버 실행 | `neckcare_webpage\start.bat` 더블클릭 (또는 `cd neckcare_final\neckcare_webpage` → `python server.py 5173`) | **http://localhost:5173** |
+| 2 | 백엔드 실행 | 백엔드 폴더에서 `python app.py` | http://127.0.0.1:5000 |
+| 3 | 웹페이지 서버 실행 | `FE\webpage\start.bat` 더블클릭 (또는 `cd FE\webpage` → `python server.py 5173`) | **http://localhost:5173** |
 | 4 | Chrome으로 접속 | — | http://localhost:5173 |
 
 - 백엔드 창에 `MariaDB 연결 및 테이블 확인 완료`가 나오면 정상입니다.
@@ -130,7 +131,7 @@ PC에 웹캠이 연결되어 있어야 합니다. 노트북 내장 카메라와 
 
 1. Chrome 주소창에 `chrome://extensions`를 입력합니다.
 2. 오른쪽 위 **개발자 모드**를 켭니다.
-3. **압축해제된 확장 프로그램을 로드합니다** → `neckcare_final\turtle-extension` 폴더를 선택합니다.
+3. **압축해제된 확장 프로그램을 로드합니다** → `FE\chrome-extension` 폴더를 선택합니다.
 4. 설치 전에 열려 있던 탭은 새로고침합니다(NeckCare 탭 포함).
 5. **다른 폴더의 같은 확장 프로그램("거북목 거북이")이 이미 설치되어 있다면 꺼 두세요.** 둘 다 켜져 있으면 거북이가 두 번 표시될 수 있습니다.
 
@@ -156,7 +157,7 @@ PC에 웹캠이 연결되어 있어야 합니다. 노트북 내장 카메라와 
 | `No module named 'MySQLdb'` | 패키지가 다른 파이썬에 설치됨 | 실행할 파이썬으로 `python -m pip install -r requirements.txt` |
 | `(2002, "Can't connect to server on '127.0.0.1'")` | MariaDB가 꺼져 있거나 미설치 | Windows 서비스에서 MariaDB 시작 / 설치 |
 | `(1049, "Unknown database 'turtle_bump'")` | 데이터베이스 없음 | 4장 2번 SQL 실행 |
-| `(1045, "Access denied")` | `.env` 계정·비밀번호 불일치 | `backend\.env` 값 확인 |
+| `(1045, "Access denied")` | `.env` 계정·비밀번호 불일치 | 백엔드 폴더의 `.env` 값 확인 |
 | 화면에 "DB 서버에 연결하지 못해 이번 측정은 저장되지 않아요" | 백엔드가 꺼져 있음 | 5장 2번 실행 후 카메라 다시 연결 |
 | 통계가 "불러오지 못했어요. 이전 결과를 유지합니다" | 백엔드가 꺼져 있음 | 백엔드 실행 후 다시 불러오기 |
 | `localhost:5173` 접속 안 됨 | 웹페이지 서버가 꺼짐 | `start.bat` 실행, 창 닫지 않기 |

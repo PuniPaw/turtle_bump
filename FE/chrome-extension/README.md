@@ -7,7 +7,7 @@ NeckCare 웹페이지에서 실제 거북목 알림이 켜지면, 다른 웹사�
 
 1. Chrome 주소창에 `chrome://extensions` 입력
 2. 오른쪽 위 **개발자 모드** 켜기
-3. **압축해제된 확장 프로그램을 로드합니다** → 이 `turtle-extension` 폴더 선택
+3. **압축해제된 확장 프로그램을 로드합니다** → 이 `chrome-extension` 폴더 선택
 4. 설치 전에 열려 있던 탭(NeckCare 포함)은 새로고침
 
 ## 동작
